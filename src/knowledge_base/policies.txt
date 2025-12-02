@@ -1,0 +1,25 @@
+## Company Policies
+
+### Customer Service Policy
+We aim to provide best-in-class customer service. Our team responds to queries within 24 hours on business days.
+
+### Privacy Policy (Summary)
+- We never sell customer data
+- SSL encryption for all transmissions
+- GDPR and CCPA compliant
+- Users can request data deletion anytime
+
+### Terms of Service (Summary)
+- Service provided "as-is"
+- Users responsible for account security
+- Prohibited: illegal content, harassment, spam
+- Violations may result in account termination
+
+### Accessibility Policy
+We're committed to accessibility. All features designed for WCAG 2.1 AA compliance. Contact us for accommodations.
+
+### Anti-Fraud Policy
+- Suspicious activities monitored automatically
+- Accounts may be flagged for verification
+- Users must not share credentials
+- Fraudulent transactions reported to authorities

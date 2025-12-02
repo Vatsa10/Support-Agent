@@ -1,0 +1,31 @@
+## Standard Procedures
+
+### Account Recovery Procedure
+1. User initiates password reset from login page
+2. Email sent with 24-hour reset link
+3. User sets new password
+4. Account re-activated automatically
+5. Email confirmation sent
+
+### Refund Processing Procedure
+1. Return request created by customer
+2. Return label generated and emailed
+3. Customer ships item back
+4. Receipt scanned in warehouse
+5. Refund initiated within 24 hours
+6. Appears in account 5-7 business days
+
+### Escalation Procedure
+1. Agent attempts resolution
+2. If unable, create support ticket
+3. Assign to supervisor if needed
+4. Follow up within 24 hours
+5. Close ticket when resolved
+
+### Bug Report Procedure
+1. User reports issue
+2. Agent gathers details (screenshots, device, OS)
+3. Ticket created for engineering
+4. Priority assigned based on severity
+5. User updated on fix timeline
+6. Closed when resolved and verified
