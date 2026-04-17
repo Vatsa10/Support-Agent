@@ -44,19 +44,19 @@ class ReActAgent:
         self.max_iterations = max_iterations
         self.model = genai.GenerativeModel(config.LLM_MODEL)
 
-    def think(self, state: ReActAgentState) -> dict:
+def think(self, state: ReActAgentState) -> dict:
         session_id = state.get("thread_id", "default")
         conversation_history = agent_memory.get_formatted_history(session_id, last_n=3)
+        
+        system_prompt = get_system_prompt(state, conversation_history)
+        
+        thought_prompt = f"""{system_prompt}
 
-        thought_prompt = f"""You are a helpful, empathetic customer support agent. Be warm, professional, and concise.
+## Current Query
+{state['current_query']}
 
-## Current Conversation
-{conversation_history}
-
-Current Query: {state["current_query"]}
-
-Previous Steps:
-{chr(10).join(state.get("steps", []))}
+## Previous Reasoning Steps
+{chr(10).join(state.get('steps', []))}
 
 ## Available Actions
 - knowledge_search: Search the knowledge base for relevant information
@@ -64,14 +64,7 @@ Previous Steps:
 - create_ticket: Create a support ticket for human escalation
 - generate_response: Generate a final response to the user
 
-## Guidelines
-- Keep responses under 200 words
-- Use natural prose, not bullet points
-- Acknowledge the customer's sentiment
-- If unsure, offer to escalate
-- Always prioritize accurate information from the knowledge base
-
-Choose ONE action and respond in JSON:
+Decide what to do next. Choose ONE action and respond in JSON format.
 {{
     "thought": "Your reasoning about what to do next",
     "action": "action_name",
