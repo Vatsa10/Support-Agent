@@ -1,21 +1,48 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from typing import TypedDict, Annotated, Sequence
 import uuid
 from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage
-from core.state import SupportAgentState
-from core.graph import support_agent
+import operator
+from agents.react import run_react_agent
 
 router = APIRouter()
 
-# In-memory storage (use Redis in production)
 conversations = {}
+
+
+class ReActAgentState(TypedDict):
+    user_id: str
+    thread_id: str
+    session_start: str
+    messages: Annotated[Sequence[HumanMessage], operator.add]
+    current_query: str
+
+    thought: str
+    action: str
+    action_input: dict
+    observation: str
+
+    classification: dict
+    retrieved_context: str
+    retrieval_scores: dict
+
+    response: str
+    requires_escalation: bool
+    ticket_id: Optional[str]
+    resolution_status: str
+
+    steps: list
+    final_answer: str
+
 
 class ChatRequest(BaseModel):
     message: str
     user_id: str
     thread_id: Optional[str] = None
+
 
 class ChatResponse(BaseModel):
     thread_id: str
@@ -24,101 +51,109 @@ class ChatResponse(BaseModel):
     status: str
     metadata: dict
 
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Handle chat request"""
-    
+    """Handle chat request using ReACT agent"""
+
     try:
-        # Generate IDs
         thread_id = request.thread_id or str(uuid.uuid4())
         conversation_key = f"{request.user_id}:{thread_id}"
-        
-        # Load or create conversation history
+
         if conversation_key not in conversations:
             conversations[conversation_key] = {
                 "messages": [],
                 "created_at": datetime.now().isoformat(),
-                "user_id": request.user_id
+                "user_id": request.user_id,
             }
-        
+
         conv = conversations[conversation_key]
-        
-        # Build messages
+
         messages = []
         for msg in conv["messages"]:
             if msg["role"] == "user":
                 messages.append(HumanMessage(content=msg["content"]))
             else:
                 messages.append(AIMessage(content=msg["content"]))
-        
-        # Create state
-        state = SupportAgentState(
+
+        messages.append(HumanMessage(content=request.message))
+
+        state = ReActAgentState(
             user_id=request.user_id,
             thread_id=thread_id,
             session_start=conv["created_at"],
             messages=messages,
             current_query=request.message,
-            category="",
-            intent="",
-            confidence_score=0.0,
-            user_sentiment="neutral",
-            retrieved_docs=[],
+            thought="",
+            action="",
+            action_input={},
+            observation="",
+            classification={},
             retrieved_context="",
             retrieval_scores={},
-            draft_response="",
-            final_response="",
+            response="",
             requires_escalation=False,
-            escalation_reason="",
-            ticket_id="",
+            ticket_id=None,
             resolution_status="pending",
-            processing_time=0.0,
-            model_used=""
+            steps=[],
+            final_answer="",
         )
-        
-        # Run agent
-        result = support_agent.invoke(state)
-        
-        # Update conversation history
-        conv["messages"].append({
-            "role": "user",
-            "content": request.message,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        conv["messages"].append({
-            "role": "assistant",
-            "content": result["final_response"],
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return ChatResponse(
-            thread_id=thread_id,
-            response=result["final_response"],
-            ticket_id=result.get("ticket_id"),
-            status=result["resolution_status"],
-            metadata={
-                "category": result["category"],
-                "intent": result["intent"],
-                "sentiment": result["user_sentiment"],
-                "confidence": result["confidence_score"],
-                "escalated": result["requires_escalation"],
-                "retrieval_scores": result.get("retrieval_scores", {})
+
+        result = run_react_agent(state)
+
+        conv["messages"].append(
+            {
+                "role": "user",
+                "content": request.message,
+                "timestamp": datetime.now().isoformat(),
             }
         )
-    
+
+        conv["messages"].append(
+            {
+                "role": "assistant",
+                "content": result.get("final_answer", result.get("response", "")),
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+        final_response = result.get("final_answer", result.get("response", ""))
+
+        return ChatResponse(
+            thread_id=thread_id,
+            response=final_response,
+            ticket_id=result.get("ticket_id"),
+            status=result.get("resolution_status", "pending"),
+            metadata={
+                "category": result.get("classification", {}).get("category", "unknown"),
+                "intent": result.get("classification", {}).get("intent", "unknown"),
+                "sentiment": result.get("classification", {}).get(
+                    "sentiment", "neutral"
+                ),
+                "confidence": result.get("classification", {}).get(
+                    "confidence_score", 0.0
+                ),
+                "escalated": result.get("requires_escalation", False),
+                "retrieval_scores": result.get("retrieval_scores", {}),
+                "steps": result.get("steps", []),
+            },
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/chat/history/{user_id}/{thread_id}")
 async def get_history(user_id: str, thread_id: str):
     """Get conversation history"""
-    
+
     conversation_key = f"{user_id}:{thread_id}"
-    
+
     if conversation_key not in conversations:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
+
     return conversations[conversation_key]
+
 
 @router.get("/health")
 async def health():
