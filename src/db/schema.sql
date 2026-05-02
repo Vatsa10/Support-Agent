@@ -154,11 +154,153 @@ ALTER TABLE kb_documents    FORCE ROW LEVEL SECURITY;
 ALTER TABLE tickets         FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_log       FORCE ROW LEVEL SECURITY;
 
+-- =========================================================================
+-- Phase 2: action authority, connectors, policy, billing, JWT
+-- =========================================================================
+
+-- tenant_integrations: per-tenant connector credentials + config (creds encrypted)
+CREATE TABLE IF NOT EXISTS tenant_integrations (
+    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    kind             text NOT NULL,
+    label            text NOT NULL DEFAULT 'default',
+    encrypted_creds  bytea NOT NULL,
+    config           jsonb NOT NULL DEFAULT '{}'::jsonb,
+    enabled          boolean NOT NULL DEFAULT true,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, kind, label)
+);
+CREATE INDEX IF NOT EXISTS tenant_integrations_tenant_idx ON tenant_integrations(tenant_id);
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_integrations TO app_user;
+
+-- tenant_jwt_secrets: per-tenant secret used to verify end-user JWTs
+CREATE TABLE IF NOT EXISTS tenant_jwt_secrets (
+    tenant_id    uuid PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    secret       bytea NOT NULL,
+    alg          text NOT NULL DEFAULT 'HS256',
+    updated_at   timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_jwt_secrets TO app_user;
+
+-- action_policies: per (tenant, tool) caps + approval thresholds
+CREATE TABLE IF NOT EXISTS action_policies (
+    id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id                   uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    tool_name                   text NOT NULL,
+    allow                       boolean NOT NULL DEFAULT false,
+    max_amount                  numeric,
+    currency                    text,
+    requires_approval_above     numeric,
+    frequency_per_user_per_day  int,
+    blocked_categories          text[],
+    extra                       jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at                  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, tool_name)
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON action_policies TO app_user;
+
+-- idempotency_keys: replay-safety for side-effecting actions
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+    tenant_id    uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    key          text NOT NULL,
+    tool_name    text NOT NULL,
+    status       text NOT NULL DEFAULT 'running',
+    result       jsonb,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, key)
+);
+GRANT SELECT, INSERT, UPDATE ON idempotency_keys TO app_user;
+
+-- action_runs: every attempted side-effecting action
+CREATE TABLE IF NOT EXISTS action_runs (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id          uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id            text NOT NULL,
+    end_user_id        text,
+    thread_id          text,
+    tool_name          text NOT NULL,
+    args               jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status             text NOT NULL,
+    result             jsonb,
+    error              text,
+    idempotency_key    text,
+    created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS action_runs_tenant_time_idx ON action_runs(tenant_id, created_at DESC);
+GRANT SELECT, INSERT, UPDATE ON action_runs TO app_user;
+
+-- approvals: human-in-the-loop queue
+CREATE TABLE IF NOT EXISTS approvals (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    action_run_id   uuid NOT NULL REFERENCES action_runs(id) ON DELETE CASCADE,
+    status          text NOT NULL DEFAULT 'pending',
+    decided_by      text,
+    decision        text,
+    reason          text,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    decided_at      timestamptz
+);
+CREATE INDEX IF NOT EXISTS approvals_pending_idx
+    ON approvals(tenant_id, created_at DESC) WHERE status = 'pending';
+GRANT SELECT, INSERT, UPDATE ON approvals TO app_user;
+
+-- billing_events: token meter
+CREATE TABLE IF NOT EXISTS billing_events (
+    id           bigserial PRIMARY KEY,
+    tenant_id    uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id      text,
+    thread_id    text,
+    event_type   text NOT NULL,
+    units        bigint NOT NULL,
+    metadata     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS billing_events_tenant_time_idx ON billing_events(tenant_id, created_at DESC);
+GRANT SELECT, INSERT ON billing_events TO app_user;
+GRANT USAGE, SELECT ON SEQUENCE billing_events_id_seq TO app_user;
+
+-- =========================================================================
+-- RLS for Phase 1 + Phase 2 tables
+-- =========================================================================
+
+ALTER TABLE tenant_settings      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE kb_documents         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tickets              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_integrations  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_jwt_secrets   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE action_policies      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE idempotency_keys     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE action_runs          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE approvals            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE billing_events       ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE tenant_settings      FORCE ROW LEVEL SECURITY;
+ALTER TABLE conversations        FORCE ROW LEVEL SECURITY;
+ALTER TABLE messages             FORCE ROW LEVEL SECURITY;
+ALTER TABLE kb_documents         FORCE ROW LEVEL SECURITY;
+ALTER TABLE tickets              FORCE ROW LEVEL SECURITY;
+ALTER TABLE audit_log            FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenant_integrations  FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenant_jwt_secrets   FORCE ROW LEVEL SECURITY;
+ALTER TABLE action_policies      FORCE ROW LEVEL SECURITY;
+ALTER TABLE idempotency_keys     FORCE ROW LEVEL SECURITY;
+ALTER TABLE action_runs          FORCE ROW LEVEL SECURITY;
+ALTER TABLE approvals            FORCE ROW LEVEL SECURITY;
+ALTER TABLE billing_events       FORCE ROW LEVEL SECURITY;
+
 DO $$
 DECLARE
     t text;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['tenant_settings','conversations','messages','kb_documents','tickets','audit_log']
+    FOREACH t IN ARRAY ARRAY[
+        'tenant_settings','conversations','messages','kb_documents','tickets','audit_log',
+        'tenant_integrations','tenant_jwt_secrets','action_policies','idempotency_keys',
+        'action_runs','approvals','billing_events'
+    ]
     LOOP
         EXECUTE format($f$
             DROP POLICY IF EXISTS tenant_isolation ON %I;

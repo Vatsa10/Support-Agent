@@ -20,6 +20,10 @@ pgvector==0.2.5
 # Valkey / Redis
 redis==5.0.1
 
+# Crypto + JWT
+cryptography==42.0.5
+PyJWT==2.8.0
+
 # API & Web
 fastapi==0.109.0
 uvicorn==0.27.0
