@@ -1,11 +1,13 @@
 from typing import TypedDict, List, Optional, Annotated, Sequence
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage
 import operator
 import json
 import google.generativeai as genai
+
 from config import config
 from config.system_prompt import get_system_prompt
 from memory.buffer import agent_memory
+from db.pool import tenant_conn
 from tools.definitions import (
     knowledge_search_tool,
     classify_intent_tool,
@@ -15,6 +17,7 @@ from tools.definitions import (
 
 
 class ReActAgentState(TypedDict):
+    tenant_id: str
     user_id: str
     thread_id: str
     session_start: str
@@ -44,12 +47,17 @@ class ReActAgent:
         self.max_iterations = max_iterations
         self.model = genai.GenerativeModel(config.LLM_MODEL)
 
-def think(self, state: ReActAgentState) -> dict:
-        session_id = state.get("thread_id", "default")
-        conversation_history = agent_memory.get_formatted_history(session_id, last_n=3)
-        
-        system_prompt = get_system_prompt(state, conversation_history)
-        
+    async def think(self, state: ReActAgentState) -> dict:
+        tenant_id = state["tenant_id"]
+        user_id = state["user_id"]
+        thread_id = state["thread_id"]
+
+        conversation_history = await agent_memory.get_formatted_history(
+            tenant_id, user_id, thread_id, last_n=3
+        )
+
+        system_prompt = await get_system_prompt(state, conversation_history)
+
         thought_prompt = f"""{system_prompt}
 
 ## Current Query
@@ -60,7 +68,7 @@ def think(self, state: ReActAgentState) -> dict:
 
 ## Available Actions
 - knowledge_search: Search the knowledge base for relevant information
-- classify_intent: Classify the user's query intent, category, and sentiment  
+- classify_intent: Classify the user's query intent, category, and sentiment
 - create_ticket: Create a support ticket for human escalation
 - generate_response: Generate a final response to the user
 
@@ -75,7 +83,7 @@ Decide what to do next. Choose ONE action and respond in JSON format.
 
         try:
             result = json.loads(response.text)
-        except:
+        except Exception:
             result = {
                 "thought": "I need to classify the intent first",
                 "action": "classify_intent",
@@ -90,17 +98,49 @@ Decide what to do next. Choose ONE action and respond in JSON format.
             ),
         }
 
-    def act(self, action: str, action_input: dict, state: ReActAgentState) -> dict:
-        session_id = state.get("thread_id", "default")
-        conversation_history = agent_memory.get_conversation_history(session_id)
+    async def _audit(
+        self, state: ReActAgentState, tool_name: str, inp: dict, out: dict
+    ) -> None:
+        """Phase 1: write a row per tool call. Phase 2 will enrich for action authority."""
+        try:
+            async with tenant_conn(state["tenant_id"]) as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO audit_log
+                        (tenant_id, user_id, thread_id, tool_name, input, output, reasoning)
+                    VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6)
+                    """,
+                    state["user_id"],
+                    state["thread_id"],
+                    tool_name,
+                    json.dumps(inp, default=str),
+                    json.dumps({k: v for k, v in out.items() if k != "response"}, default=str),
+                    state.get("thought", ""),
+                )
+        except Exception as e:
+            print(f"audit write failed: {e}")
+
+    async def act(
+        self, action: str, action_input: dict, state: ReActAgentState
+    ) -> dict:
+        tenant_id = state["tenant_id"]
+        user_id = state["user_id"]
+        thread_id = state["thread_id"]
+
+        conversation_history = await agent_memory.get_conversation_history(
+            tenant_id, user_id, thread_id
+        )
+
+        out: dict = {"observation": "Unknown action"}
 
         if action == "knowledge_search":
-            result = knowledge_search_tool.run(
+            result = await knowledge_search_tool.run(
+                tenant_id=tenant_id,
                 query=action_input.get("query", state["current_query"]),
                 category=action_input.get("category"),
                 top_k=action_input.get("top_k"),
             )
-            return {
+            out = {
                 "observation": f"Found {len(result['results'])} relevant documents. Context: {result['context'][:500]}...",
                 "retrieved_context": result["context"],
                 "retrieval_scores": result["scores"],
@@ -108,22 +148,27 @@ Decide what to do next. Choose ONE action and respond in JSON format.
 
         elif action == "classify_intent":
             result = classify_intent_tool.run(
+                tenant_id=tenant_id,
                 query=action_input.get("query", state["current_query"]),
                 conversation_history=conversation_history,
             )
-            return {
+            out = {
                 "observation": f"Classified as {result['category']} intent: {result['intent']}, sentiment: {result['sentiment']}",
                 "classification": result,
             }
 
         elif action == "create_ticket":
-            result = create_ticket_tool.run(
+            result = await create_ticket_tool.run(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
                 user_query=state["current_query"],
                 category=state.get("classification", {}).get("category", "general"),
                 sentiment=state.get("classification", {}).get("sentiment", "neutral"),
+                intent=state.get("classification", {}).get("intent"),
                 reason=action_input.get("reason"),
             )
-            return {
+            out = {
                 "observation": f"Created ticket {result['ticket_id']}",
                 "ticket_id": result["ticket_id"],
                 "response": result["response"],
@@ -133,6 +178,7 @@ Decide what to do next. Choose ONE action and respond in JSON format.
         elif action == "generate_response":
             classification = state.get("classification", {})
             result = generate_response_tool.run(
+                tenant_id=tenant_id,
                 query=state["current_query"],
                 context=state.get("retrieved_context", ""),
                 category=classification.get("category", "general"),
@@ -140,14 +186,14 @@ Decide what to do next. Choose ONE action and respond in JSON format.
                 confidence=classification.get("confidence_score", 0.5),
                 conversation_history=conversation_history,
             )
-            return {
+            out = {
                 "observation": f"Generated response: {result['response'][:100]}...",
                 "response": result["response"],
                 "requires_escalation": result["needs_escalation"],
             }
 
         elif action == "END":
-            return {
+            out = {
                 "observation": "Task completed",
                 "response": state.get(
                     "response",
@@ -155,17 +201,22 @@ Decide what to do next. Choose ONE action and respond in JSON format.
                 ),
             }
 
-        return {"observation": "Unknown action"}
+        await self._audit(state, action, action_input, out)
+        return out
 
-    def run(self, state: ReActAgentState) -> dict:
-        session_id = state.get("thread_id", "default")
+    async def run(self, state: ReActAgentState) -> dict:
+        tenant_id = state["tenant_id"]
+        user_id = state["user_id"]
+        thread_id = state["thread_id"]
 
-        agent_memory.add_user_message(session_id, state["current_query"])
+        await agent_memory.add_user_message(
+            tenant_id, user_id, thread_id, state["current_query"]
+        )
 
         iteration = 0
 
         while iteration < self.max_iterations:
-            thought_result = self.think(state)
+            thought_result = await self.think(state)
             state["thought"] = thought_result["thought"]
             state["action"] = thought_result["action"]
             state["action_input"] = thought_result["action_input"]
@@ -179,9 +230,15 @@ Decide what to do next. Choose ONE action and respond in JSON format.
             if action == "END" or (
                 action == "generate_response" and not state.get("requires_escalation")
             ):
+                act_result = await self.act(action, action_input, state)
+                state["observation"] = act_result.get("observation", "")
+                if "response" in act_result:
+                    state["response"] = act_result["response"]
+                if "requires_escalation" in act_result:
+                    state["requires_escalation"] = act_result["requires_escalation"]
                 break
 
-            act_result = self.act(action, action_input, state)
+            act_result = await self.act(action, action_input, state)
             state["observation"] = act_result.get("observation", "")
 
             if "classification" in act_result:
@@ -200,10 +257,14 @@ Decide what to do next. Choose ONE action and respond in JSON format.
             iteration += 1
 
         if state.get("requires_escalation") and not state.get("ticket_id"):
-            ticket_result = create_ticket_tool.run(
+            ticket_result = await create_ticket_tool.run(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
                 user_query=state["current_query"],
                 category=state.get("classification", {}).get("category", "general"),
                 sentiment=state.get("classification", {}).get("sentiment", "neutral"),
+                intent=state.get("classification", {}).get("intent"),
             )
             state["ticket_id"] = ticket_result["ticket_id"]
             state["response"] = ticket_result["response"]
@@ -218,7 +279,9 @@ Decide what to do next. Choose ONE action and respond in JSON format.
 
         state["final_answer"] = state.get("response", state.get("observation", ""))
 
-        agent_memory.add_ai_message(session_id, state["final_answer"])
+        await agent_memory.add_ai_message(
+            tenant_id, user_id, thread_id, state["final_answer"]
+        )
 
         return state
 
@@ -226,5 +289,5 @@ Decide what to do next. Choose ONE action and respond in JSON format.
 react_agent = ReActAgent()
 
 
-def run_react_agent(state: ReActAgentState) -> dict:
-    return react_agent.run(state)
+async def run_react_agent(state: ReActAgentState) -> dict:
+    return await react_agent.run(state)

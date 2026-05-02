@@ -1,17 +1,10 @@
-import os
 from pathlib import Path
+from typing import Optional
 
+from cache.valkey import cache_get, cache_set, tenant_key
+from db.pool import tenant_conn
 
-def load_system_prompt() -> str:
-    """Load base system prompt from file."""
-
-    prompt_path = Path(__file__).parent.parent / "prompt.md"
-
-    if prompt_path.exists():
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            return f.read()
-    else:
-        return """You are a helpful, empathetic customer support agent.
+_DEFAULT_PROMPT = """You are a helpful, empathetic customer support agent.
 
 Guidelines:
 - Keep responses concise and helpful
@@ -21,28 +14,44 @@ Guidelines:
 - If unsure, offer to escalate"""
 
 
-def get_system_prompt(state: dict = None, conversation_history: str = "") -> str:
-    """Generate system prompt with context and conversation history.
+def _load_base_prompt() -> str:
+    prompt_path = Path(__file__).parent.parent / "prompt.md"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8")
+    return _DEFAULT_PROMPT
 
-    Args:
-        state: Optional dict with classification, retrieved_context, etc.
-        conversation_history: Formatted string of previous messages
 
-    Returns:
-        Complete system prompt string
-    """
+async def _tenant_override(tenant_id: str) -> Optional[str]:
+    cache_k = tenant_key(tenant_id, "prompt_override")
+    cached = await cache_get(cache_k)
+    if cached is not None:
+        return cached or None  # empty string means no override
 
-    system_prompt = load_system_prompt()
+    async with tenant_conn(tenant_id) as conn:
+        row = await conn.fetchrow(
+            "SELECT system_prompt_override FROM tenant_settings WHERE tenant_id = current_setting('app.tenant_id')::uuid"
+        )
+    override = (row["system_prompt_override"] if row else None) or ""
+    await cache_set(cache_k, override, ttl_seconds=300)
+    return override or None
+
+
+async def get_system_prompt(state: dict = None, conversation_history: str = "") -> str:
+    base = _load_base_prompt()
+
+    if state and state.get("tenant_id"):
+        override = await _tenant_override(state["tenant_id"])
+        if override:
+            base = override
 
     if conversation_history:
-        system_prompt += f"""
+        base += f"""
 
 ## Current Conversation History
 
 {conversation_history}
 
-Use the conversation history above to maintain context and provide personalized responses.
-Remember any details the user has shared in previous messages."""
+Use the conversation history above to maintain context and provide personalized responses."""
 
     if state:
         category = state.get("classification", {}).get("category", "general")
@@ -50,7 +59,7 @@ Remember any details the user has shared in previous messages."""
         confidence = state.get("classification", {}).get("confidence_score", 0.0)
         context = state.get("retrieved_context", "")
 
-        system_prompt += f"""
+        base += f"""
 
 ## Current Query Context
 
@@ -63,4 +72,4 @@ Retrieved Knowledge Base Context:
 
 Important: If confidence is below threshold or you don't have clear answer, suggest escalation."""
 
-    return system_prompt
+    return base

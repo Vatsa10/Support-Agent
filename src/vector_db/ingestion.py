@@ -93,8 +93,12 @@ class AdvancedChunkingStrategy:
         return chunk_objects
 
 
-def load_knowledge_base(kb_path: str) -> List[dict]:
-    """Load and chunk all knowledge base documents from any text file."""
+def load_knowledge_base(kb_path: str, tenant_id: str = None) -> List[dict]:
+    """Load and chunk knowledge base documents.
+
+    If tenant_id provided, reads from <kb_path>/<tenant_id>/.
+    Otherwise reads from kb_path directly (legacy / single-tenant fallback).
+    """
 
     import os
 
@@ -103,20 +107,22 @@ def load_knowledge_base(kb_path: str) -> List[dict]:
 
     supported_extensions = [".txt", ".md", ".csv", ".json", ".html", ".htm"]
 
-    if not os.path.exists(kb_path):
-        print(f"⚠️ Knowledge base path does not exist: {kb_path}")
+    target = os.path.join(kb_path, tenant_id) if tenant_id else kb_path
+
+    if not os.path.exists(target):
+        print(f"Knowledge base path does not exist: {target}")
         return []
 
     file_count = 0
 
-    for filename in os.listdir(kb_path):
+    for filename in os.listdir(target):
         ext = os.path.splitext(filename)[1].lower()
 
         if ext not in supported_extensions:
             continue
 
         file_count += 1
-        filepath = os.path.join(kb_path, filename)
+        filepath = os.path.join(target, filename)
 
         try:
             with open(filepath, "r", encoding="utf-8") as f:

@@ -1,103 +1,84 @@
-import os
+import argparse
+import asyncio
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from config import config
-from vector_db.ingestion import load_knowledge_base
-from vector_db.retrieval import retriever
-from agents.react import run_react_agent
 from langchain_core.messages import HumanMessage
-import uuid
-from datetime import datetime
+
+from agents.react import run_react_agent
+from cache.valkey import init_cache, close_cache
+from db.pool import init_pool, close_pool
 
 
-class ReActAgentState(dict):
-    pass
-
-
-def main():
-    print("🚀 Initializing 24x7 Support Agent (ReACT)...")
-    print(f"📚 Loading knowledge base from: {config.KB_PATH}")
-
-    chunks = load_knowledge_base(config.KB_PATH)
-    print(f"✅ Loaded {len(chunks)} chunks")
-
-    print("🔍 Indexing documents...")
-    retriever.index_documents(chunks)
-    print("✅ Documents indexed\n")
-
-    user_id = str(uuid.uuid4())
-    thread_id = str(uuid.uuid4())
-    session_start = datetime.now().isoformat()
-    messages = []
-
+async def amain(tenant_id: str) -> None:
+    await init_pool()
+    await init_cache()
     print("=" * 60)
-    print("24x7 AI SUPPORT AGENT (ReACT)")
+    print(f"24x7 AI SUPPORT AGENT (tenant={tenant_id})")
     print("=" * 60)
     print("Type 'exit' to quit\n")
 
-    while True:
-        user_input = input("You: ").strip()
+    user_id = str(uuid.uuid4())
+    thread_id = str(uuid.uuid4())
+    session_start = datetime.now(timezone.utc).isoformat()
 
-        if user_input.lower() == "exit":
-            print("👋 Thank you for using Support Agent!")
-            break
+    try:
+        while True:
+            user_input = input("You: ").strip()
+            if user_input.lower() == "exit":
+                print("bye")
+                break
+            if not user_input:
+                continue
 
-        if not user_input:
-            continue
+            state = {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "thread_id": thread_id,
+                "session_start": session_start,
+                "messages": [HumanMessage(content=user_input)],
+                "current_query": user_input,
+                "thought": "",
+                "action": "",
+                "action_input": {},
+                "observation": "",
+                "classification": {},
+                "retrieved_context": "",
+                "retrieval_scores": {},
+                "response": "",
+                "requires_escalation": False,
+                "ticket_id": None,
+                "resolution_status": "pending",
+                "steps": [],
+                "final_answer": "",
+            }
 
-        messages.append(HumanMessage(content=user_input))
+            print("\nProcessing...")
+            result = await run_react_agent(state)
 
-        state = {
-            "user_id": user_id,
-            "thread_id": thread_id,
-            "session_start": session_start,
-            "messages": messages,
-            "current_query": user_input,
-            "thought": "",
-            "action": "",
-            "action_input": {},
-            "observation": "",
-            "classification": {},
-            "retrieved_context": "",
-            "retrieval_scores": {},
-            "response": "",
-            "requires_escalation": False,
-            "ticket_id": None,
-            "resolution_status": "pending",
-            "steps": [],
-            "final_answer": "",
-        }
+            print(f"\nAgent: {result.get('final_answer', '')}\n")
+            cls = result.get("classification", {})
+            print(f"Category: {cls.get('category', 'unknown')}")
+            print(f"Intent: {cls.get('intent', 'unknown')}")
+            print(f"Sentiment: {cls.get('sentiment', 'neutral')}")
+            print(f"Status: {result.get('resolution_status', 'pending')}")
+            if result.get("ticket_id"):
+                print(f"Ticket: {result['ticket_id']}")
+            print()
+    finally:
+        await close_cache()
+        await close_pool()
 
-        print("\n⏳ Processing...")
-        result = run_react_agent(state)
 
-        print(f"\n🤖 Agent: {result.get('final_answer', result.get('response', ''))}\n")
-
-        print(f"📊 Metadata:")
-        classification = result.get("classification", {})
-        print(f"   Category: {classification.get('category', 'unknown')}")
-        print(f"   Intent: {classification.get('intent', 'unknown')}")
-        print(f"   Sentiment: {classification.get('sentiment', 'neutral')}")
-        print(f"   Confidence: {classification.get('confidence_score', 0):.2%}")
-
-        retrieval_scores = result.get("retrieval_scores", {})
-        print(
-            f"   Retrieval Scores: Dense={retrieval_scores.get('dense', 0):.2f}, Sparse={retrieval_scores.get('sparse', 0):.2f}"
-        )
-
-        print(f"   Status: {result.get('resolution_status', 'pending')}")
-
-        if result.get("ticket_id"):
-            print(f"   Ticket: {result['ticket_id']}")
-
-        print(f"\n🔄 ReACT Steps:")
-        for i, step in enumerate(result.get("steps", []), 1):
-            print(f"   {i}. {step[:100]}...")
-
-        print()
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Support Agent CLI (multi-tenant)")
+    parser.add_argument("--tenant-id", required=True, help="Tenant UUID")
+    args = parser.parse_args()
+    asyncio.run(amain(args.tenant_id))
 
 
 if __name__ == "__main__":

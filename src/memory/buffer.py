@@ -1,67 +1,101 @@
-from langchain.memory import ConversationBufferMemory
-from langchain.memory.chat_message_histories.in_memory import ChatMessageHistory
-from typing import List, Optional
-from datetime import datetime
+from typing import List
+from db.pool import tenant_conn
 
 
 class SupportAgentMemory:
+    """Postgres-backed, tenant-scoped conversation memory.
+
+    All access funneled through tenant_conn -> RLS enforces isolation.
+    """
+
     def __init__(self, max_history: int = 10):
         self.max_history = max_history
-        self.sessions: dict = {}
 
-    def get_memory(self, session_id: str) -> ConversationBufferMemory:
-        if session_id not in self.sessions:
-            self.sessions[session_id] = ConversationBufferMemory(
-                max_token_limit=2000, return_messages=True
+    async def _ensure_conversation(
+        self, conn, tenant_id: str, user_id: str, thread_id: str
+    ) -> str:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO conversations (tenant_id, user_id, thread_id)
+            VALUES (current_setting('app.tenant_id')::uuid, $1, $2)
+            ON CONFLICT (tenant_id, user_id, thread_id)
+                DO UPDATE SET last_at = now()
+            RETURNING id
+            """,
+            user_id,
+            thread_id,
+        )
+        return str(row["id"])
+
+    async def add_user_message(
+        self, tenant_id: str, user_id: str, thread_id: str, content: str
+    ) -> None:
+        async with tenant_conn(tenant_id) as conn:
+            conv_id = await self._ensure_conversation(conn, tenant_id, user_id, thread_id)
+            await conn.execute(
+                """
+                INSERT INTO messages (tenant_id, conversation_id, role, content)
+                VALUES (current_setting('app.tenant_id')::uuid, $1, 'user', $2)
+                """,
+                conv_id,
+                content,
             )
-        return self.sessions[session_id]
 
-    def add_user_message(self, session_id: str, message: str):
-        memory = self.get_memory(session_id)
-        memory.chat_memory.add_user_message(message)
-        self._trim_history(session_id)
+    async def add_ai_message(
+        self, tenant_id: str, user_id: str, thread_id: str, content: str
+    ) -> None:
+        async with tenant_conn(tenant_id) as conn:
+            conv_id = await self._ensure_conversation(conn, tenant_id, user_id, thread_id)
+            await conn.execute(
+                """
+                INSERT INTO messages (tenant_id, conversation_id, role, content)
+                VALUES (current_setting('app.tenant_id')::uuid, $1, 'assistant', $2)
+                """,
+                conv_id,
+                content,
+            )
 
-    def add_ai_message(self, session_id: str, message: str):
-        memory = self.get_memory(session_id)
-        memory.chat_memory.add_ai_message(message)
-        self._trim_history(session_id)
-
-    def get_conversation_history(self, session_id: str) -> List[dict]:
-        memory = self.get_memory(session_id)
-        messages = memory.chat_memory.messages
+    async def get_conversation_history(
+        self, tenant_id: str, user_id: str, thread_id: str, limit: int = None
+    ) -> List[dict]:
+        n = limit or (self.max_history * 2)
+        async with tenant_conn(tenant_id) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT m.role, m.content, m.created_at
+                FROM messages m
+                JOIN conversations c ON c.id = m.conversation_id
+                WHERE c.user_id = $1 AND c.thread_id = $2
+                ORDER BY m.created_at DESC
+                LIMIT $3
+                """,
+                user_id,
+                thread_id,
+                n,
+            )
+        rows = list(reversed(rows))
         return [
             {
-                "role": "user" if m.type == "human" else "assistant",
-                "content": m.content,
-                "timestamp": getattr(m, "timestamp", datetime.now().isoformat()),
+                "role": r["role"],
+                "content": r["content"],
+                "timestamp": r["created_at"].isoformat(),
             }
-            for m in messages
+            for r in rows
         ]
 
-    def _trim_history(self, session_id: str):
-        memory = self.get_memory(session_id)
-        if len(memory.chat_memory.messages) > self.max_history * 2:
-            memory.chat_memory.messages = memory.chat_memory.messages[
-                -self.max_history * 2 :
-            ]
-
-    def clear_session(self, session_id: str):
-        if session_id in self.sessions:
-            del self.sessions[session_id]
-
-    def get_formatted_history(self, session_id: str, last_n: int = 5) -> str:
-        history = self.get_conversation_history(session_id)
+    async def get_formatted_history(
+        self, tenant_id: str, user_id: str, thread_id: str, last_n: int = 5
+    ) -> str:
+        history = await self.get_conversation_history(
+            tenant_id, user_id, thread_id, limit=last_n * 2
+        )
         if not history:
             return ""
-
-        recent = history[-last_n * 2 :] if len(history) > last_n * 2 else history
-
-        formatted = []
-        for msg in recent:
+        lines = []
+        for msg in history:
             role = "User" if msg["role"] == "user" else "Assistant"
-            formatted.append(f"{role}: {msg['content']}")
-
-        return "\n".join(formatted)
+            lines.append(f"{role}: {msg['content']}")
+        return "\n".join(lines)
 
 
 agent_memory = SupportAgentMemory()
