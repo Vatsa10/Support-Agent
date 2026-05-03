@@ -1,11 +1,30 @@
+import asyncio
 import json
 import time
 import google.generativeai as genai
 
+from billing.meter import record_tokens
 from tools.base import Tool, tool_registry
 from vector_db.retrieval import retriever
 from db.pool import tenant_conn
 from config import config
+
+
+def _meter(tenant_id: str, user_id: str | None, thread_id: str | None, response) -> None:
+    try:
+        um = getattr(response, "usage_metadata", None)
+        if not um:
+            return
+        in_tok = int(getattr(um, "prompt_token_count", 0) or 0)
+        out_tok = int(getattr(um, "candidates_token_count", 0) or 0)
+        if not (in_tok or out_tok):
+            return
+        loop = asyncio.get_event_loop()
+        loop.create_task(
+            record_tokens(tenant_id, user_id or "", thread_id or "", in_tok, out_tok, model=config.LLM_MODEL)
+        )
+    except Exception as e:
+        print(f"meter failed: {e}")
 
 
 class KnowledgeSearchTool:
@@ -88,6 +107,7 @@ Provide analysis in JSON format:
 Return only valid JSON, no markdown formatting."""
 
         response = model.generate_content(prompt)
+        _meter(tenant_id, None, None, response)
 
         try:
             result = json.loads(response.text)
@@ -216,6 +236,7 @@ Important: If confidence is below {config.CONFIDENCE_THRESHOLD} or you don't hav
                 max_output_tokens=500,
             ),
         )
+        _meter(tenant_id, None, None, response)
 
         return {
             "response": response.text,

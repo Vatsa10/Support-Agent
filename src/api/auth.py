@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+import jwt as pyjwt
 from fastapi import Header, HTTPException, status
 
+from cache.valkey import cache_delete, cache_get, cache_set, tenant_key
 from config import config
-from db.pool import sys_conn
-from cache.valkey import cache_get, cache_set
+from db.pool import sys_conn, tenant_conn
+from security.crypto import decrypt, encrypt
 
 
 @dataclass
@@ -71,3 +73,70 @@ async def require_admin(
     if not x_admin_key or not secrets.compare_digest(x_admin_key, config.ADMIN_API_KEY):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid admin key")
     return True
+
+
+# ============================================================
+# Per-tenant end-user JWT (HS256)
+# ============================================================
+
+JWT_SECRET_BYTES = 32
+
+
+async def get_or_create_jwt_secret(tenant_id: str, rotate: bool = False) -> str:
+    """Returns the raw HS256 secret (base64-url) for a tenant. Generates if missing.
+
+    Stored encrypted at rest using Fernet (security/crypto).
+    """
+    async with tenant_conn(tenant_id) as conn:
+        row = await conn.fetchrow(
+            "SELECT secret FROM tenant_jwt_secrets WHERE tenant_id = current_setting('app.tenant_id')::uuid"
+        )
+        if row and not rotate:
+            return decrypt(bytes(row["secret"])).decode("ascii")
+
+        secret = secrets.token_urlsafe(JWT_SECRET_BYTES)
+        enc = encrypt(secret.encode("ascii"))
+        await conn.execute(
+            """
+            INSERT INTO tenant_jwt_secrets (tenant_id, secret)
+            VALUES (current_setting('app.tenant_id')::uuid, $1)
+            ON CONFLICT (tenant_id) DO UPDATE
+                SET secret = EXCLUDED.secret, updated_at = now()
+            """,
+            enc,
+        )
+    await cache_delete(tenant_key(tenant_id, "jwt_secret"))
+    return secret
+
+
+async def _load_jwt_secret(tenant_id: str) -> Optional[str]:
+    cache_k = tenant_key(tenant_id, "jwt_secret")
+    cached = await cache_get(cache_k)
+    if cached:
+        return cached if cached != "__none__" else None
+
+    async with tenant_conn(tenant_id) as conn:
+        row = await conn.fetchrow(
+            "SELECT secret FROM tenant_jwt_secrets WHERE tenant_id = current_setting('app.tenant_id')::uuid"
+        )
+    if not row:
+        await cache_set(cache_k, "__none__", ttl_seconds=60)
+        return None
+    secret = decrypt(bytes(row["secret"])).decode("ascii")
+    await cache_set(cache_k, secret, ttl_seconds=300)
+    return secret
+
+
+async def verify_end_user_jwt(token: str, tenant_id: str) -> Optional[str]:
+    """Returns end_user_id (sub claim) if valid; raises 401 if header present but bad."""
+    secret = await _load_jwt_secret(tenant_id)
+    if not secret:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tenant has no JWT secret configured")
+    try:
+        payload = pyjwt.decode(token, secret, algorithms=["HS256"])
+    except pyjwt.PyJWTError as e:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid JWT: {e}")
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "JWT missing sub")
+    return str(sub)

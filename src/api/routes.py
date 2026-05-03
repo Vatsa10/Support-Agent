@@ -3,12 +3,12 @@ from typing import Optional, TypedDict, Annotated, Sequence
 import operator
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from agents.react import run_react_agent
-from api.auth import Tenant, require_tenant
+from api.auth import Tenant, require_tenant, verify_end_user_jwt
 from cache.valkey import incr_with_ttl, tenant_key
 from config import config
 from memory.buffer import agent_memory
@@ -30,23 +30,32 @@ class ChatResponse(BaseModel):
     metadata: dict
 
 
-async def _enforce_rate_limit(tenant: Tenant) -> None:
+async def _enforce_rate_limit(tenant: Tenant, key_suffix: str) -> None:
     minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-    key = tenant_key(tenant.id, "rl", minute)
+    key = tenant_key(tenant.id, "rl", key_suffix, minute)
     count = await incr_with_ttl(key, ttl_seconds=70)
     if count > config.RATE_LIMIT_PER_MIN:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, tenant: Tenant = Depends(require_tenant)):
-    await _enforce_rate_limit(tenant)
+async def chat(
+    request: ChatRequest,
+    tenant: Tenant = Depends(require_tenant),
+    x_end_user_jwt: str = Header(default=None, alias="X-End-User-JWT"),
+):
+    end_user_id: str | None = None
+    if x_end_user_jwt:
+        end_user_id = await verify_end_user_jwt(x_end_user_jwt, tenant.id)
+
+    await _enforce_rate_limit(tenant, end_user_id or request.user_id)
 
     thread_id = request.thread_id or str(uuid.uuid4())
 
     state = {
         "tenant_id": tenant.id,
         "user_id": request.user_id,
+        "end_user_id": end_user_id,
         "thread_id": thread_id,
         "session_start": datetime.now(timezone.utc).isoformat(),
         "messages": [HumanMessage(content=request.message)],

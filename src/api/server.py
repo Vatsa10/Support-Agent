@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router
 from api.admin import router as admin_router
+from api.integrations import router as integrations_router
 from cache.valkey import init_cache, close_cache
 from config import config
 from db.pool import init_pool, close_pool
@@ -40,6 +41,7 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 app.include_router(admin_router, prefix="/admin")
+app.include_router(integrations_router, prefix="/admin")
 
 
 if __name__ == "__main__":
