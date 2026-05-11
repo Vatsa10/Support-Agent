@@ -2,6 +2,7 @@ import base64
 
 import httpx
 
+from connectors._http import IntegrationUnhealthy, request_with_retry
 from connectors.base import Connector, ToolSpec, register
 
 
@@ -58,8 +59,9 @@ class ZendeskConnector(Connector):
         base = self._base_url()
         headers = {**self._auth_header(), "Content-Type": "application/json"}
         ticket_id = args["ticket_id"]
+        tid = self.tenant_id or ""
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
             if tool_name == "close_zendesk_ticket":
                 body = {"ticket": {"status": "closed"}}
                 if args.get("public_comment"):
@@ -67,8 +69,9 @@ class ZendeskConnector(Connector):
                         "body": args["public_comment"],
                         "public": True,
                     }
-                resp = await client.put(
-                    f"{base}/tickets/{ticket_id}.json", json=body, headers=headers
+                resp = await request_with_retry(
+                    tenant_id=tid, kind=self.kind, method="PUT",
+                    url=f"{base}/tickets/{ticket_id}.json", json=body, headers=headers,
                 )
             elif tool_name == "comment_zendesk_ticket":
                 body = {
@@ -79,11 +82,14 @@ class ZendeskConnector(Connector):
                         }
                     }
                 }
-                resp = await client.put(
-                    f"{base}/tickets/{ticket_id}.json", json=body, headers=headers
+                resp = await request_with_retry(
+                    tenant_id=tid, kind=self.kind, method="PUT",
+                    url=f"{base}/tickets/{ticket_id}.json", json=body, headers=headers,
                 )
             else:
                 return {"ok": False, "error": f"unsupported tool {tool_name}"}
+        except IntegrationUnhealthy as e:
+            return {"ok": False, "error": "integration_unhealthy", "data": {"reason": str(e)}}
 
         try:
             data = resp.json()

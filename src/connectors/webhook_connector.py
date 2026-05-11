@@ -1,5 +1,6 @@
 import httpx
 
+from connectors._http import IntegrationUnhealthy, request_with_retry
 from connectors.base import Connector, ToolSpec, register
 
 
@@ -49,8 +50,17 @@ class WebhookConnector(Connector):
 
         body = {"action": action_name, "payload": args.get("payload", {})}
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(url, json=body, headers=headers)
+        try:
+            resp = await request_with_retry(
+                tenant_id=self.tenant_id or "",
+                kind=self.kind,
+                method="POST",
+                url=url,
+                json=body,
+                headers=headers,
+            )
+        except IntegrationUnhealthy as e:
+            return {"ok": False, "error": "integration_unhealthy", "data": {"reason": str(e)}}
 
         try:
             data = resp.json()

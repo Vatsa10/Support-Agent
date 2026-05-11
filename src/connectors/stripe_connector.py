@@ -49,28 +49,37 @@ class StripeConnector(Connector):
         return {"Authorization": f"Bearer {api_key}"}
 
     async def execute(self, tool_name: str, args: dict) -> dict:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
             if tool_name == "issue_refund":
                 charge_id = args["charge_id"]
                 amount = args["amount"]
-                currency = args.get("currency", "usd")
-                # Stripe expects amount in minor units (cents)
                 minor = int(round(float(amount) * 100))
                 form = {"amount": str(minor), "reason": args.get("reason", "requested_by_customer")}
                 if charge_id.startswith("pi_"):
                     form["payment_intent"] = charge_id
                 else:
                     form["charge"] = charge_id
-                resp = await client.post(
-                    f"{STRIPE_BASE}/refunds", data=form, headers=self._auth()
+                resp = await request_with_retry(
+                    tenant_id=self.tenant_id or "",
+                    kind=self.kind,
+                    method="POST",
+                    url=f"{STRIPE_BASE}/refunds",
+                    headers={**self._auth(), "Content-Type": "application/x-www-form-urlencoded"},
+                    data=form,
                 )
             elif tool_name == "cancel_subscription":
                 sub_id = args["subscription_id"]
-                resp = await client.delete(
-                    f"{STRIPE_BASE}/subscriptions/{sub_id}", headers=self._auth()
+                resp = await request_with_retry(
+                    tenant_id=self.tenant_id or "",
+                    kind=self.kind,
+                    method="DELETE",
+                    url=f"{STRIPE_BASE}/subscriptions/{sub_id}",
+                    headers=self._auth(),
                 )
             else:
                 return {"ok": False, "error": f"unsupported tool {tool_name}"}
+        except IntegrationUnhealthy as e:
+            return {"ok": False, "error": "integration_unhealthy", "data": {"reason": str(e)}}
 
         try:
             data = resp.json()

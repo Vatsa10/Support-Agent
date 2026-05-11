@@ -1,5 +1,6 @@
 import httpx
 
+from connectors._http import IntegrationUnhealthy, request_with_retry
 from connectors.base import Connector, ToolSpec, register
 
 
@@ -54,23 +55,27 @@ class ShopifyConnector(Connector):
     async def execute(self, tool_name: str, args: dict) -> dict:
         base = self._base_url()
         headers = self._headers()
+        tid = self.tenant_id or ""
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
             if tool_name == "cancel_order":
                 order_id = args["order_id"]
                 body = {"reason": args.get("reason", "customer")}
                 if args.get("refund"):
                     body["refund"] = True
-                resp = await client.post(
-                    f"{base}/orders/{order_id}/cancel.json", json=body, headers=headers
+                resp = await request_with_retry(
+                    tenant_id=tid, kind=self.kind, method="POST",
+                    url=f"{base}/orders/{order_id}/cancel.json",
+                    json=body, headers=headers,
                 )
-                data = _safe_json(resp)
-                return _result(resp, data)
+                return _result(resp, _safe_json(resp))
 
             if tool_name == "replace_order":
                 order_id = args["order_id"]
-                # 1) Fetch original
-                r1 = await client.get(f"{base}/orders/{order_id}.json", headers=headers)
+                r1 = await request_with_retry(
+                    tenant_id=tid, kind=self.kind, method="GET",
+                    url=f"{base}/orders/{order_id}.json", headers=headers,
+                )
                 if not r1.is_success:
                     return _result(r1, _safe_json(r1))
                 order = (r1.json() or {}).get("order", {})
@@ -89,15 +94,17 @@ class ShopifyConnector(Connector):
                     }
                 }
                 draft["draft_order"] = {k: v for k, v in draft["draft_order"].items() if v is not None}
-                r2 = await client.post(f"{base}/draft_orders.json", json=draft, headers=headers)
+                r2 = await request_with_retry(
+                    tenant_id=tid, kind=self.kind, method="POST",
+                    url=f"{base}/draft_orders.json", json=draft, headers=headers,
+                )
                 draft_data = _safe_json(r2)
                 if not r2.is_success:
                     return _result(r2, draft_data)
-                # 2) Cancel original
-                r3 = await client.post(
-                    f"{base}/orders/{order_id}/cancel.json",
-                    json={"reason": "other"},
-                    headers=headers,
+                r3 = await request_with_retry(
+                    tenant_id=tid, kind=self.kind, method="POST",
+                    url=f"{base}/orders/{order_id}/cancel.json",
+                    json={"reason": "other"}, headers=headers,
                 )
                 return {
                     "ok": r3.is_success,
@@ -106,6 +113,8 @@ class ShopifyConnector(Connector):
                     "external_id": (draft_data.get("draft_order") or {}).get("id")
                         if isinstance(draft_data, dict) else None,
                 }
+        except IntegrationUnhealthy as e:
+            return {"ok": False, "error": "integration_unhealthy", "data": {"reason": str(e)}}
 
         return {"ok": False, "error": f"unsupported tool {tool_name}"}
 
