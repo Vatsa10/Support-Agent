@@ -158,7 +158,7 @@ export function Sidebar({
         {userEmail && (
           <form action="/api/auth/logout" method="post" className="flex items-center justify-between">
             <span className="truncate text-ink-2 normal-case">{userEmail}</span>
-            <button type="submit" className="hover:text-blue ml-2 shrink-0">sign out</button>
+            <button type="submit" className="hover:text-danger ml-2 shrink-0">sign out</button>
           </form>
         )}
       </div>

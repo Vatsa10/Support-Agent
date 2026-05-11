@@ -20,7 +20,7 @@ from db.pool import sys_conn, tenant_conn
 
 router = APIRouter()
 
-PBKDF2_ITERS = 240_000
+PBKDF2_ITERS = 120_000
 
 
 def _hash_password(pw: str) -> str:

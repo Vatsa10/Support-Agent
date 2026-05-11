@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 
 export default function SignIn() {
-  const router = useRouter();
+  const _router = useRouter();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -14,19 +14,28 @@ export default function SignIn() {
     setBusy(true);
     setErr(null);
     const fd = new FormData(e.currentTarget);
-    const res = await fetch("/api/auth/signin", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setErr(data.error || "Sign-in failed");
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 30_000);
+    try {
+      const res = await fetch("/api/auth/signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
+        signal: ctrl.signal
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(data.error || "Sign-in failed");
+        setBusy(false);
+        return;
+      }
+      window.location.href = "/dashboard";
+    } catch (e: any) {
+      setErr(e?.name === "AbortError" ? "Timed out. Try again." : e?.message || "Network error");
       setBusy(false);
-      return;
+    } finally {
+      clearTimeout(t);
     }
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (
