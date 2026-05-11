@@ -1,4 +1,4 @@
-import { Instrument_Serif, Geist, JetBrains_Mono } from "next/font/google";
+import { Instrument_Serif, IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
 
 export const display = Instrument_Serif({
   subsets: ["latin"],
@@ -8,8 +8,9 @@ export const display = Instrument_Serif({
   display: "swap"
 });
 
-export const sans = Geist({
+export const sans = IBM_Plex_Sans({
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
   variable: "--font-sans",
   display: "swap"
 });

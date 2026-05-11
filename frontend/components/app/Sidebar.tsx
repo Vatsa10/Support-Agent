@@ -12,10 +12,20 @@ import {
   Coins,
   KeyRound,
   Settings,
-  BookOpen
+  BookOpen,
+  Code2
 } from "lucide-react";
 
-const groups = [
+type NavItem = {
+  href: string;
+  title: string;
+  icon: typeof LayoutGrid;
+  badge?: string;
+  emphasize?: boolean;
+};
+type NavGroup = { label: string; items: NavItem[] };
+
+const groups: NavGroup[] = [
   {
     label: "Overview",
     items: [
@@ -33,6 +43,7 @@ const groups = [
   {
     label: "Configure",
     items: [
+      { href: "/install",      title: "Install",      icon: Code2, emphasize: true },
       { href: "/integrations", title: "Integrations", icon: Plug },
       { href: "/policies",     title: "Policies",     icon: ShieldCheck },
       { href: "/kb",           title: "Knowledge",    icon: Database },
@@ -102,7 +113,7 @@ export function Sidebar() {
                             "px-1.5 h-[18px] inline-flex items-center font-mono text-[10.5px] " +
                             (active
                               ? "bg-paper/15 text-paper"
-                              : (it as any).emphasize
+                              : it.emphasize
                               ? "bg-blue text-paper"
                               : "bg-line-2 text-ink-2")
                           }
