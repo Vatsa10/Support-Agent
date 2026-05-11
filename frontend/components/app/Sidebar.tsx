@@ -60,8 +60,22 @@ const groups: NavGroup[] = [
   }
 ];
 
-export function Sidebar() {
+export function Sidebar({
+  tenantName,
+  tenantId,
+  userEmail
+}: {
+  tenantName?: string;
+  tenantId?: string;
+  userEmail?: string;
+} = {}) {
   const pathname = usePathname();
+  const initials =
+    (tenantName || "Workspace")
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() ?? "")
+      .join("") || "RS";
   return (
     <aside className="hidden md:flex flex-col w-[248px] shrink-0 border-r border-line bg-paper sticky top-0 h-dvh">
       <div className="px-5 h-14 flex items-center border-b border-line">
@@ -75,11 +89,15 @@ export function Sidebar() {
 
       <div className="px-3 py-3 border-b border-line">
         <button className="w-full text-left h-10 px-2.5 hover:bg-cream transition flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 bg-ink text-paper text-[10.5px] flex items-center justify-center font-mono">AG</div>
-            <div className="leading-tight">
-              <div className="text-[13px]">Acme Goods</div>
-              <div className="text-[10.5px] font-mono text-ink-3">org_2pq…</div>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-6 h-6 bg-ink text-paper text-[10.5px] flex items-center justify-center font-mono shrink-0">
+              {initials}
+            </div>
+            <div className="leading-tight min-w-0">
+              <div className="text-[13px] truncate">{tenantName || "Workspace"}</div>
+              <div className="text-[10.5px] font-mono text-ink-3 truncate">
+                {tenantId ? `org_${tenantId.replace(/-/g, "").slice(0, 6)}…` : ""}
+              </div>
             </div>
           </div>
           <span className="text-ink-3 text-[12px]">⇅</span>
@@ -130,11 +148,19 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="border-t border-line p-3 text-[11px] text-ink-3 font-mono flex items-center justify-between">
-        <span>v3.0.0</span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" /> all systems
-        </span>
+      <div className="border-t border-line p-3 text-[11px] text-ink-3 font-mono">
+        <div className="flex items-center justify-between mb-2">
+          <span>v3.0.0</span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" /> live
+          </span>
+        </div>
+        {userEmail && (
+          <form action="/api/auth/logout" method="post" className="flex items-center justify-between">
+            <span className="truncate text-ink-2 normal-case">{userEmail}</span>
+            <button type="submit" className="hover:text-blue ml-2 shrink-0">sign out</button>
+          </form>
+        )}
       </div>
     </aside>
   );
