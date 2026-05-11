@@ -5,10 +5,13 @@ import json
 import google.generativeai as genai
 
 from billing.meter import record_tokens
+from budget.enforcer import BudgetExceeded, check_budget
 from config import config
 from config.system_prompt import get_system_prompt
 from db.pool import tenant_conn
 from memory.buffer import agent_memory
+from observability.metrics import TOKEN_TOTAL, TOOL_RUNS
+from safety.prompt_guard import scrub_context
 from tools import registry
 
 
@@ -90,6 +93,10 @@ Decide what to do next. Choose ONE action and respond in JSON format.
 
         response = self.model.generate_content(thought_prompt)
         in_tok, out_tok = _usage(response)
+        if in_tok:
+            TOKEN_TOTAL.labels(event_type="llm_input_tokens").inc(in_tok)
+        if out_tok:
+            TOKEN_TOTAL.labels(event_type="llm_output_tokens").inc(out_tok)
         await record_tokens(tenant_id, user_id, thread_id, in_tok, out_tok, model=config.LLM_MODEL)
 
         try:
@@ -163,6 +170,8 @@ Decide what to do next. Choose ONE action and respond in JSON format.
             return out
 
         out = _normalize_tool_output(action, result, state)
+        status = "ok" if not result.get("error") else "error"
+        TOOL_RUNS.labels(tool=action, status=status).inc()
         await self._audit(state, action, action_input, out)
         return out
 
@@ -170,6 +179,17 @@ Decide what to do next. Choose ONE action and respond in JSON format.
         tenant_id = state["tenant_id"]
         user_id = state["user_id"]
         thread_id = state["thread_id"]
+
+        try:
+            await check_budget(tenant_id)
+        except BudgetExceeded as e:
+            state["response"] = (
+                "Monthly token budget exceeded. A human agent will follow up. "
+                f"({e.used}/{e.cap} tokens this month)"
+            )
+            state["resolution_status"] = "budget_exceeded"
+            state["final_answer"] = state["response"]
+            return state
 
         await agent_memory.add_user_message(
             tenant_id, user_id, thread_id, state["current_query"]
@@ -254,7 +274,7 @@ def _normalize_tool_output(action: str, result: dict, state: ReActAgentState) ->
     if action == "knowledge_search":
         return {
             "observation": f"Found {len(result.get('results', []))} relevant docs.",
-            "retrieved_context": result.get("context", ""),
+            "retrieved_context": scrub_context(result.get("context", "")),
             "retrieval_scores": result.get("scores", {}),
         }
     if action == "classify_intent":
