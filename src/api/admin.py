@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api.auth import generate_api_key, hash_api_key, require_admin
@@ -9,6 +9,63 @@ from vector_db.ingestion import load_knowledge_base
 from vector_db.retrieval import retriever
 
 router = APIRouter()
+
+
+@router.get("/tenants")
+async def list_tenants(
+    _admin: bool = Depends(require_admin),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(None),
+):
+    async with sys_conn() as conn:
+        if status:
+            rows = await conn.fetch(
+                "SELECT id, name, plan, status, created_at FROM tenants WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                status, limit, offset,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT id, name, plan, status, created_at FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                limit, offset,
+            )
+    return [
+        {"id": str(r["id"]), "name": r["name"], "plan": r["plan"],
+         "status": r["status"], "created_at": r["created_at"].isoformat()}
+        for r in rows
+    ]
+
+
+@router.post("/tenants/{tenant_id}/suspend")
+async def suspend_tenant(tenant_id: str, _admin: bool = Depends(require_admin)):
+    async with sys_conn() as conn:
+        result = await conn.execute(
+            "UPDATE tenants SET status='suspended' WHERE id = $1", tenant_id,
+        )
+    if not result.endswith("1"):
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return {"tenant_id": tenant_id, "status": "suspended"}
+
+
+@router.post("/tenants/{tenant_id}/activate")
+async def activate_tenant(tenant_id: str, _admin: bool = Depends(require_admin)):
+    async with sys_conn() as conn:
+        result = await conn.execute(
+            "UPDATE tenants SET status='active' WHERE id = $1", tenant_id,
+        )
+    if not result.endswith("1"):
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return {"tenant_id": tenant_id, "status": "active"}
+
+
+@router.delete("/tenants/{tenant_id}")
+async def delete_tenant(tenant_id: str, _admin: bool = Depends(require_admin)):
+    """Hard delete tenant + cascade. Irreversible."""
+    async with sys_conn() as conn:
+        result = await conn.execute("DELETE FROM tenants WHERE id = $1", tenant_id)
+    if not result.endswith("1"):
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return {"tenant_id": tenant_id, "deleted": True}
 
 
 class CreateTenantRequest(BaseModel):
