@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.admin import router as admin_router
+from api.auth_routes import router as auth_router
 from api.integrations import router as integrations_router
 from api.routes import router as api_router
 from api.tenant_api import router as tenant_router
@@ -56,6 +57,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(integrations_router, prefix="/admin")
 app.include_router(tenant_router, prefix="/tenant")

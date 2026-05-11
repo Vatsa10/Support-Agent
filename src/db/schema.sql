@@ -249,6 +249,20 @@ GRANT SELECT, INSERT, UPDATE ON approvals TO app_user;
 -- Phase 3: api keys, webhook events, token budgets, lifecycle
 -- =========================================================================
 
+-- users: per-tenant operators (signup creates one)
+CREATE TABLE IF NOT EXISTS users (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    email           text NOT NULL UNIQUE,
+    password_hash   text NOT NULL,
+    name            text,
+    role            text NOT NULL DEFAULT 'admin',
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    last_login_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS users_tenant_idx ON users(tenant_id);
+GRANT SELECT, INSERT, UPDATE ON users TO app_user;
+
 -- Multiple API keys per tenant (supports rotation + multi-env)
 CREATE TABLE IF NOT EXISTS api_keys (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

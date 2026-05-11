@@ -324,6 +324,193 @@ async def billing(tenant: Tenant = Depends(require_tenant)):
     return await monthly_summary(tenant.id)
 
 
+# ---- Dashboard aggregate stats --------------------------------------------
+
+@router.get("/stats")
+async def tenant_stats(tenant: Tenant = Depends(require_tenant)):
+    """One-shot KPI roll-up for the dashboard home page."""
+    async with tenant_conn(tenant.id) as conn:
+        # last-30d conversations
+        resolutions_30d = await conn.fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE started_at >= now() - interval '30 days'"
+        )
+        pending = await conn.fetchval(
+            "SELECT COUNT(*) FROM approvals WHERE status = 'pending'"
+        )
+        succeeded = await conn.fetchval(
+            "SELECT COUNT(*) FROM action_runs WHERE status = 'succeeded' AND created_at >= now() - interval '30 days'"
+        )
+        attempted = await conn.fetchval(
+            "SELECT COUNT(*) FROM action_runs WHERE created_at >= now() - interval '30 days'"
+        )
+        escalated = await conn.fetchval(
+            "SELECT COUNT(*) FROM tickets WHERE created_at >= now() - interval '30 days'"
+        )
+        spark_rows = await conn.fetch(
+            """
+            SELECT date_trunc('day', started_at)::date AS d, COUNT(*)::int AS n
+            FROM conversations
+            WHERE started_at >= now() - interval '15 days'
+            GROUP BY d ORDER BY d
+            """
+        )
+        recent = await conn.fetch(
+            """
+            SELECT c.id, c.thread_id, c.user_id, c.last_at,
+                   (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_msg,
+                   (SELECT tool_name FROM action_runs r WHERE r.thread_id = c.thread_id ORDER BY r.created_at DESC LIMIT 1) AS last_action
+            FROM conversations c
+            ORDER BY c.last_at DESC LIMIT 8
+            """
+        )
+        budget_row = await conn.fetchrow(
+            "SELECT monthly_token_cap FROM token_budgets WHERE tenant_id = current_setting('app.tenant_id')::uuid"
+        )
+        used_row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(units),0)::bigint AS used
+            FROM billing_events
+            WHERE event_type IN ('llm_input_tokens','llm_output_tokens')
+              AND created_at >= date_trunc('month', now())
+            """
+        )
+
+    resolutions_30d = int(resolutions_30d or 0)
+    attempted = int(attempted or 0)
+    succeeded = int(succeeded or 0)
+    escalated = int(escalated or 0)
+    pending = int(pending or 0)
+    monthly_tokens = int((used_row or {}).get("used", 0) or 0)
+    cap = int(budget_row["monthly_token_cap"]) if budget_row and budget_row["monthly_token_cap"] else 0
+
+    deflection_rate = (1 - (escalated / resolutions_30d)) if resolutions_30d else 0.0
+    action_success_rate = (succeeded / attempted) if attempted else 0.0
+
+    return {
+        "tenant_id": tenant.id,
+        "tenant_name": tenant.name,
+        "kpis": {
+            "resolutions_30d": resolutions_30d,
+            "deflection_rate": deflection_rate,
+            "action_success_rate": action_success_rate,
+            "approvals_pending": pending,
+            "monthly_tokens": monthly_tokens,
+            "token_cap": cap,
+        },
+        "sparkline": [int(r["n"]) for r in spark_rows] or [0],
+        "recent": [
+            {
+                "id": str(r["id"]),
+                "thread_id": r["thread_id"],
+                "user_id": r["user_id"],
+                "last_at": r["last_at"].isoformat() if r["last_at"] else None,
+                "last_msg": (r["last_msg"] or "")[:120],
+                "last_action": r["last_action"] or "",
+            }
+            for r in recent
+        ],
+    }
+
+
+@router.get("/conversations")
+async def list_conversations(
+    tenant: Tenant = Depends(require_tenant),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    async with tenant_conn(tenant.id) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT c.id, c.thread_id, c.user_id, c.started_at, c.last_at,
+                   (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at ASC LIMIT 1) AS first_msg,
+                   (SELECT tool_name FROM action_runs r WHERE r.thread_id = c.thread_id ORDER BY r.created_at DESC LIMIT 1) AS last_action
+            FROM conversations c
+            ORDER BY c.last_at DESC LIMIT $1 OFFSET $2
+            """,
+            limit, offset,
+        )
+    return [
+        {
+            "id": str(r["id"]),
+            "thread_id": r["thread_id"],
+            "user_id": r["user_id"],
+            "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+            "last_at": r["last_at"].isoformat() if r["last_at"] else None,
+            "subject": (r["first_msg"] or "")[:120],
+            "last_action": r["last_action"] or "",
+        }
+        for r in rows
+    ]
+
+
+@router.get("/conversations/{conv_id}")
+async def get_conversation(conv_id: str, tenant: Tenant = Depends(require_tenant)):
+    async with tenant_conn(tenant.id) as conn:
+        c = await conn.fetchrow(
+            "SELECT id, thread_id, user_id, started_at, last_at FROM conversations WHERE id = $1",
+            conv_id,
+        )
+        if not c:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        msgs = await conn.fetch(
+            "SELECT role, content, metadata, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at",
+            conv_id,
+        )
+        runs = await conn.fetch(
+            """
+            SELECT id, tool_name, args, status, result, created_at
+            FROM action_runs WHERE thread_id = $1 ORDER BY created_at
+            """,
+            c["thread_id"],
+        )
+    return {
+        "id": str(c["id"]),
+        "thread_id": c["thread_id"],
+        "user_id": c["user_id"],
+        "started_at": c["started_at"].isoformat() if c["started_at"] else None,
+        "messages": [
+            {"role": m["role"], "content": m["content"], "metadata": dict(m["metadata"] or {}),
+             "at": m["created_at"].isoformat()}
+            for m in msgs
+        ],
+        "actions": [
+            {"id": str(r["id"]), "tool_name": r["tool_name"], "status": r["status"],
+             "args": dict(r["args"] or {}), "result": dict(r["result"] or {}),
+             "at": r["created_at"].isoformat()}
+            for r in runs
+        ],
+    }
+
+
+@router.get("/actions")
+async def list_actions(
+    tenant: Tenant = Depends(require_tenant),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    async with tenant_conn(tenant.id) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, tool_name, status, args, result, error, idempotency_key, created_at
+            FROM action_runs ORDER BY created_at DESC LIMIT $1 OFFSET $2
+            """,
+            limit, offset,
+        )
+    return [
+        {
+            "id": str(r["id"]),
+            "tool_name": r["tool_name"],
+            "status": r["status"],
+            "args": dict(r["args"] or {}),
+            "result": dict(r["result"] or {}),
+            "error": r["error"],
+            "external_id": (r["result"] or {}).get("external_id"),
+            "at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+
+
 # ---- Token budget self-config + GDPR --------------------------------------
 
 class BudgetBody(BaseModel):

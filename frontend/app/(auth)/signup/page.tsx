@@ -1,7 +1,39 @@
+"use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 
 export default function SignUp() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    const fd = new FormData(e.currentTarget);
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: fd.get("name"),
+        company: fd.get("company"),
+        email: fd.get("email"),
+        password: fd.get("password")
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setErr(data.error || "Signup failed");
+      setBusy(false);
+      return;
+    }
+    router.push("/dashboard");
+    router.refresh();
+  }
+
   return (
     <div>
       <div className="text-[11px] uppercase tracking-[0.18em] text-ink-3 mb-4">Get started</div>
@@ -10,21 +42,33 @@ export default function SignUp() {
       </h1>
       <p className="mt-3 text-ink-2 text-[14px]">$0 forever for the first 200 resolutions per month.</p>
 
-      <form className="mt-10 space-y-5">
+      <form onSubmit={submit} className="mt-10 space-y-5">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Full name" placeholder="Kira Tan" />
-          <Field label="Company" placeholder="Acme Goods" />
+          <Field name="name" label="Full name" placeholder="Kira Tan" required />
+          <Field name="company" label="Company" placeholder="Acme Goods" required />
         </div>
-        <Field label="Work email" type="email" placeholder="kira@acme.co" />
-        <Field label="Password" type="password" placeholder="•••••••••" hint="At least 12 characters, mixed case." />
+        <Field name="email" label="Work email" type="email" placeholder="kira@acme.co" required />
+        <Field
+          name="password"
+          label="Password"
+          type="password"
+          placeholder="•••••••••••"
+          required
+          minLength={10}
+          hint="At least 10 characters."
+        />
+        {err && <div className="text-[13px] text-danger">{err}</div>}
 
-        <button className="w-full h-11 bg-ink text-paper inline-flex items-center justify-center gap-2 text-[14px] hover:bg-blue transition">
-          Create workspace <ArrowRight size={15} />
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full h-11 bg-ink text-paper inline-flex items-center justify-center gap-2 text-[14px] hover:bg-blue transition disabled:opacity-50"
+        >
+          {busy ? "Creating workspace…" : <>Create workspace <ArrowRight size={15} /></>}
         </button>
         <p className="text-[12px] text-ink-3 leading-relaxed">
           By continuing you agree to our <Link href="/terms" className="underline underline-offset-4 decoration-line">Terms</Link>{" "}
-          and <Link href="/privacy" className="underline underline-offset-4 decoration-line">Privacy</Link>. We'll never
-          email you for product news without asking first.
+          and <Link href="/privacy" className="underline underline-offset-4 decoration-line">Privacy</Link>.
         </p>
       </form>
 

@@ -1,7 +1,34 @@
+"use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 
 export default function SignIn() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    const fd = new FormData(e.currentTarget);
+    const res = await fetch("/api/auth/signin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setErr(data.error || "Sign-in failed");
+      setBusy(false);
+      return;
+    }
+    router.push("/dashboard");
+    router.refresh();
+  }
+
   return (
     <div>
       <div className="text-[11px] uppercase tracking-[0.18em] text-ink-3 mb-4">Welcome back</div>
@@ -10,24 +37,22 @@ export default function SignIn() {
       </h1>
       <p className="mt-3 text-ink-2 text-[14px]">Operating support at the speed of an API call.</p>
 
-      <form className="mt-10 space-y-5">
-        <Field label="Work email" type="email" placeholder="kira@acme.co" />
-        <Field label="Password" type="password" placeholder="••••••••••" />
+      <form onSubmit={submit} className="mt-10 space-y-5">
+        <Field name="email" label="Work email" type="email" placeholder="kira@acme.co" required />
+        <Field name="password" label="Password" type="password" placeholder="••••••••••" required />
+        {err && <div className="text-[13px] text-danger">{err}</div>}
         <div className="flex items-center justify-between text-[12.5px]">
           <label className="inline-flex items-center gap-2 text-ink-2">
             <input type="checkbox" className="accent-blue h-3.5 w-3.5" /> Keep me signed in
           </label>
           <Link href="/forgot" className="text-ink-2 hover:text-blue transition">Forgot?</Link>
         </div>
-        <button className="w-full h-11 bg-ink text-paper inline-flex items-center justify-center gap-2 text-[14px] hover:bg-blue transition">
-          Sign in <ArrowRight size={15} />
-        </button>
-        <div className="relative my-2 text-center">
-          <span className="absolute inset-x-0 top-1/2 h-px bg-line" />
-          <span className="relative inline-block bg-paper px-3 text-[11px] uppercase tracking-[0.18em] text-ink-3">or</span>
-        </div>
-        <button className="w-full h-11 border border-line text-[13.5px] hover:border-ink transition">
-          Continue with SSO
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full h-11 bg-ink text-paper inline-flex items-center justify-center gap-2 text-[14px] hover:bg-blue transition disabled:opacity-50"
+        >
+          {busy ? "Signing in…" : <>Sign in <ArrowRight size={15} /></>}
         </button>
       </form>
 
