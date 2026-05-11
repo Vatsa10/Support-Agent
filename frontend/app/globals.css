@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --grid: rgba(10, 10, 10, 0.045);
+}
+
+html,
+body {
+  background: #ffffff;
+  color: #0a0a0a;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #1b4dff;
+  color: #fff;
+}
+
+/* Layered hairline grid used as decorative background */
+.bg-grid {
+  background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+.bg-dot {
+  background-image: radial-gradient(rgba(10, 10, 10, 0.09) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* Hero gradient: white -> blue tint, only place we use it */
+.hero-wash {
+  background:
+    radial-gradient(1100px 480px at 80% -10%, rgba(27, 77, 255, 0.10), transparent 60%),
+    radial-gradient(800px 360px at 5% 110%, rgba(27, 77, 255, 0.07), transparent 60%),
+    #ffffff;
+}
+
+/* Sharp focus ring */
+*:focus-visible {
+  outline: 2px solid #1b4dff;
+  outline-offset: 2px;
+}
+
+/* Hide scrollbar (used in tenant switcher row) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+/* Sparkline path styling */
+.spark path { fill: none; stroke: #1b4dff; stroke-width: 1.5; }
+.spark .area { fill: rgba(27, 77, 255, 0.10); stroke: none; }
+
+/* Diagonal stripe for "in flight" status */
+.stripe-bg {
+  background-image: repeating-linear-gradient(
+    -45deg, rgba(10,10,10,0.06) 0 6px, transparent 6px 12px
+  );
+}
