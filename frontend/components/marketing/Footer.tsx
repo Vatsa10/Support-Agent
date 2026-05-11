@@ -43,7 +43,7 @@ export function Footer() {
           </div>
         </div>
         <div className="mt-16 pt-6 border-t border-line flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
-          <div className="text-[12px] text-ink-3">© {new Date().getFullYear()} Resolve Labs, Inc.</div>
+          <div className="text-[12px] text-ink-3">© {new Date().getFullYear()} Vatsa's Labs</div>
           <div className="font-mono text-[11px] text-ink-3">v3.0.0 · build 0a91c</div>
         </div>
       </div>

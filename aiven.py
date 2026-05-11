@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from db._dns_patch import install as _install_dns_fallback  # noqa: E402
+_install_dns_fallback()
+
 
 async def check_pg() -> None:
     import asyncpg

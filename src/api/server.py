@@ -1,5 +1,8 @@
 from contextlib import asynccontextmanager
 
+from db._dns_patch import install as _install_dns_fallback
+_install_dns_fallback()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

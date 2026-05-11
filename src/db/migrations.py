@@ -1,5 +1,14 @@
 import asyncio
+import sys
 from pathlib import Path
+
+# Ensure `src/` on path when run as script (PYTHONPATH not required).
+_SRC = Path(__file__).resolve().parent.parent
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from db._dns_patch import install as _install_dns_fallback
+_install_dns_fallback()
 
 from db.pool import init_pool, close_pool, sys_conn
 

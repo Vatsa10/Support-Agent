@@ -19,7 +19,11 @@ def _ssl_context() -> Optional[ssl.SSLContext]:
 
 
 async def _setup_conn(conn: asyncpg.Connection) -> None:
-    await register_vector(conn)
+    # Best-effort: pgvector type may not exist yet on first migration boot.
+    try:
+        await register_vector(conn)
+    except Exception:
+        pass
 
 
 async def init_pool() -> asyncpg.Pool:
