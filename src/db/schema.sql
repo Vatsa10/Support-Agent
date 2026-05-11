@@ -245,6 +245,49 @@ CREATE INDEX IF NOT EXISTS approvals_pending_idx
     ON approvals(tenant_id, created_at DESC) WHERE status = 'pending';
 GRANT SELECT, INSERT, UPDATE ON approvals TO app_user;
 
+-- =========================================================================
+-- Phase 3: api keys, webhook events, token budgets, lifecycle
+-- =========================================================================
+
+-- Multiple API keys per tenant (supports rotation + multi-env)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    api_key_hash    text NOT NULL UNIQUE,
+    label           text NOT NULL DEFAULT 'default',
+    status          text NOT NULL DEFAULT 'active',
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    last_used_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_keys_tenant_idx ON api_keys(tenant_id);
+GRANT SELECT, INSERT, UPDATE ON api_keys TO app_user;
+
+-- webhook_events: inbound vendor callbacks (Stripe/Shopify/Zendesk)
+CREATE TABLE IF NOT EXISTS webhook_events (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    kind          text NOT NULL,
+    external_id   text,
+    event_type    text,
+    payload       jsonb NOT NULL,
+    signature_ok  boolean NOT NULL,
+    processed     boolean NOT NULL DEFAULT false,
+    received_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, kind, external_id)
+);
+CREATE INDEX IF NOT EXISTS webhook_events_tenant_idx ON webhook_events(tenant_id, received_at DESC);
+GRANT SELECT, INSERT, UPDATE ON webhook_events TO app_user;
+
+-- token_budgets: per-tenant monthly cap (0 or NULL = unlimited)
+CREATE TABLE IF NOT EXISTS token_budgets (
+    tenant_id            uuid PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    monthly_token_cap    bigint,
+    hard_cap             boolean NOT NULL DEFAULT true,
+    notify_above_pct     int NOT NULL DEFAULT 80,
+    updated_at           timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON token_budgets TO app_user;
+
 -- billing_events: token meter
 CREATE TABLE IF NOT EXISTS billing_events (
     id           bigserial PRIMARY KEY,
@@ -277,6 +320,9 @@ ALTER TABLE idempotency_keys     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE action_runs          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE approvals            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_events       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_keys             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE webhook_events       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE token_budgets        ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE tenant_settings      FORCE ROW LEVEL SECURITY;
 ALTER TABLE conversations        FORCE ROW LEVEL SECURITY;
@@ -291,6 +337,9 @@ ALTER TABLE idempotency_keys     FORCE ROW LEVEL SECURITY;
 ALTER TABLE action_runs          FORCE ROW LEVEL SECURITY;
 ALTER TABLE approvals            FORCE ROW LEVEL SECURITY;
 ALTER TABLE billing_events       FORCE ROW LEVEL SECURITY;
+ALTER TABLE api_keys             FORCE ROW LEVEL SECURITY;
+ALTER TABLE webhook_events       FORCE ROW LEVEL SECURITY;
+ALTER TABLE token_budgets        FORCE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -299,7 +348,8 @@ BEGIN
     FOREACH t IN ARRAY ARRAY[
         'tenant_settings','conversations','messages','kb_documents','tickets','audit_log',
         'tenant_integrations','tenant_jwt_secrets','action_policies','idempotency_keys',
-        'action_runs','approvals','billing_events'
+        'action_runs','approvals','billing_events',
+        'api_keys','webhook_events','token_budgets'
     ]
     LOOP
         EXECUTE format($f$

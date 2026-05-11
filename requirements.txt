@@ -24,6 +24,13 @@ redis==5.0.1
 cryptography==42.0.5
 PyJWT==2.8.0
 
+# Resilience + scheduling + observability
+tenacity==8.2.3
+apscheduler==3.10.4
+prometheus-client==0.20.0
+python-json-logger==2.0.7
+pytest-httpx==0.30.0
+
 # API & Web
 fastapi==0.109.0
 uvicorn==0.27.0
