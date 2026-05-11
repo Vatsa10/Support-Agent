@@ -15,6 +15,9 @@ class Config:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
+    # Master encryption key (Fernet). Used by src/security/crypto.py.
+    ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
+
     # Postgres (Aiven)
     PG_URI = os.getenv("PG_URI", "")
     PG_SSLROOTCERT = os.getenv("PG_SSLROOTCERT", "")
