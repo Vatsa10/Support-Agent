@@ -42,7 +42,7 @@ async def _load_connector_for(tenant_id: str, kind: str) -> Optional[Connector]:
         return None
     creds = decrypt_json(row["encrypted_creds"])
     config = dict(row["config"] or {})
-    return _load(kind, creds, config)
+    return _load(kind, creds, config, tenant_id=tenant_id)
 
 
 async def _record_run(

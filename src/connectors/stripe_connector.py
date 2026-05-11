@@ -1,5 +1,6 @@
 import httpx
 
+from connectors._http import IntegrationUnhealthy, request_with_retry
 from connectors.base import Connector, ToolSpec, register
 
 STRIPE_BASE = "https://api.stripe.com/v1"

@@ -14,9 +14,10 @@ class ToolSpec:
 class Connector(ABC):
     kind: str = ""
 
-    def __init__(self, creds: dict, config: dict):
+    def __init__(self, creds: dict, config: dict, tenant_id: str | None = None):
         self.creds = creds or {}
         self.config = config or {}
+        self.tenant_id = tenant_id
 
     @abstractmethod
     def tool_specs(self) -> list[ToolSpec]: ...
@@ -35,7 +36,7 @@ def register(cls: Type[Connector]) -> Type[Connector]:
     return cls
 
 
-def load_connector(kind: str, creds: dict, config: dict) -> Connector:
+def load_connector(kind: str, creds: dict, config: dict, tenant_id: str | None = None) -> Connector:
     if kind not in KIND_TO_CLASS:
         raise ValueError(f"Unknown connector kind: {kind}")
-    return KIND_TO_CLASS[kind](creds, config)
+    return KIND_TO_CLASS[kind](creds, config, tenant_id)
