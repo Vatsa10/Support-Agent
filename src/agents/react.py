@@ -2,13 +2,13 @@ from typing import TypedDict, List, Optional, Annotated, Sequence
 from langchain_core.messages import BaseMessage
 import operator
 import json
-import google.generativeai as genai
 
 from billing.meter import record_tokens
 from budget.enforcer import BudgetExceeded, check_budget
 from config import config
 from config.system_prompt import get_system_prompt
 from db.pool import tenant_conn
+from llm.gemini import generate_text, usage_pair
 from memory.buffer import agent_memory
 from observability.metrics import TOKEN_TOTAL, TOOL_RUNS
 from safety.prompt_guard import scrub_context
@@ -49,17 +49,9 @@ class ReActAgentState(TypedDict, total=False):
     _conversation_history: list
 
 
-def _usage(response) -> tuple[int, int]:
-    um = getattr(response, "usage_metadata", None)
-    if not um:
-        return 0, 0
-    return int(getattr(um, "prompt_token_count", 0) or 0), int(getattr(um, "candidates_token_count", 0) or 0)
-
-
 class ReActAgent:
     def __init__(self, max_iterations: int = 10):
         self.max_iterations = max_iterations
-        self.model = genai.GenerativeModel(config.LLM_MODEL)
 
     async def think(self, state: ReActAgentState) -> dict:
         tenant_id = state["tenant_id"]
@@ -91,8 +83,8 @@ Decide what to do next. Choose ONE action and respond in JSON format.
     "action_input": {{"key": "value"}}
 }}"""
 
-        response = self.model.generate_content(thought_prompt)
-        in_tok, out_tok = _usage(response)
+        response = generate_text(thought_prompt)
+        in_tok, out_tok = usage_pair(response)
         if in_tok:
             TOKEN_TOTAL.labels(event_type="llm_input_tokens").inc(in_tok)
         if out_tok:

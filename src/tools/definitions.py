@@ -1,9 +1,9 @@
 import asyncio
 import json
 import time
-import google.generativeai as genai
 
 from billing.meter import record_tokens
+from llm.gemini import generate_text, usage_pair
 from tools.base import Tool, tool_registry
 from vector_db.retrieval import retriever
 from db.pool import tenant_conn
@@ -12,11 +12,7 @@ from config import config
 
 def _meter(tenant_id: str, user_id: str | None, thread_id: str | None, response) -> None:
     try:
-        um = getattr(response, "usage_metadata", None)
-        if not um:
-            return
-        in_tok = int(getattr(um, "prompt_token_count", 0) or 0)
-        out_tok = int(getattr(um, "candidates_token_count", 0) or 0)
+        in_tok, out_tok = usage_pair(response)
         if not (in_tok or out_tok):
             return
         loop = asyncio.get_event_loop()
@@ -81,7 +77,6 @@ class IntentClassifierTool:
         conversation_history: list = None,
     ):
         start_time = time.time()
-        model = genai.GenerativeModel(config.LLM_MODEL)
 
         conversation_text = ""
         if conversation_history:
@@ -106,7 +101,7 @@ Provide analysis in JSON format:
 
 Return only valid JSON, no markdown formatting."""
 
-        response = model.generate_content(prompt)
+        response = generate_text(prompt)
         _meter(tenant_id, None, None, response)
 
         try:
@@ -198,7 +193,6 @@ class ResponseGeneratorTool:
         conversation_history: list = None,
     ):
         start_time = time.time()
-        model = genai.GenerativeModel(config.LLM_MODEL)
 
         system_prompt = f"""You are a helpful, empathetic customer support agent.
 
@@ -228,13 +222,12 @@ Important: If confidence is below {config.CONFIDENCE_THRESHOLD} or you don't hav
 
         conversation_messages.append({"role": "user", "parts": [{"text": query}]})
 
-        response = model.generate_content(
+        response = generate_text(
+            prompt="",
             contents=conversation_messages,
             system_instruction=system_prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=config.LLM_TEMPERATURE,
-                max_output_tokens=500,
-            ),
+            temperature=config.LLM_TEMPERATURE,
+            max_output_tokens=500,
         )
         _meter(tenant_id, None, None, response)
 

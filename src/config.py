@@ -27,7 +27,7 @@ class Config:
     VALKEY_URI = os.getenv("VALKEY_URI", "")
 
     # Embeddings
-    DENSE_MODEL = "models/embedding-001"
+    DENSE_MODEL = os.getenv("DENSE_MODEL", "gemini-embedding-001")
     EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", 768))
 
     # Search
@@ -46,8 +46,8 @@ class Config:
     KB_PATH = os.getenv("KB_PATH", "./src/knowledge_base/")
 
     # LLM
-    LLM_MODEL = "gemini-2.0-flash"
-    LLM_TEMPERATURE = 0.7
+    LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", 0.7))
 
 
 config = Config()
