@@ -1,10 +1,18 @@
 "use client";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { ArrowRight } from "lucide-react";
 
-export default function Reset() {
+export default function ResetPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-3 text-[13px]">Loading…</div>}>
+      <Reset />
+    </Suspense>
+  );
+}
+
+function Reset() {
   const search = useSearchParams();
   const token = search.get("token") || "";
   const [busy, setBusy] = useState(false);

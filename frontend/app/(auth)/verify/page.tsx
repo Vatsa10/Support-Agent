@@ -1,9 +1,17 @@
 "use client";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
-export default function Verify() {
+export default function VerifyPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-3 text-[13px]">Loading…</div>}>
+      <Verify />
+    </Suspense>
+  );
+}
+
+function Verify() {
   const search = useSearchParams();
   const token = search.get("token") || "";
   const [state, setState] = useState<"verifying" | "ok" | "fail">("verifying");
