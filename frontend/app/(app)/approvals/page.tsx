@@ -1,7 +1,8 @@
+"use client";
+import { useEffect, useState } from "react";
 import { Topbar } from "@/components/app/Topbar";
 import { EmptyState } from "@/components/app/EmptyState";
 import { StatusPill } from "@/components/app/StatusPill";
-import { backendFetchSafe } from "@/lib/api-server";
 import { fmtTimeAgo, shortId } from "@/lib/fmt";
 
 type Approval = {
@@ -14,15 +15,47 @@ type Approval = {
   args: any;
 };
 
-export default async function ApprovalsPage() {
-  const rows = (await backendFetchSafe<Approval[]>("/tenant/approvals?limit=50")) || [];
+export default function ApprovalsPage() {
+  const [rows, setRows] = useState<Approval[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    const r = await fetch("/api/backend/tenant/approvals?limit=50", { cache: "no-store" });
+    if (r.ok) setRows(await r.json());
+    setLoading(false);
+  }
+  useEffect(() => { refresh(); }, []);
+
+  async function decide(approval_id: string, decision: "approve" | "reject") {
+    const reason = decision === "reject"
+      ? prompt("Reason for rejection (optional):") || ""
+      : prompt("Approval note (optional):") || "";
+    setBusy(approval_id);
+    const r = await fetch(`/api/backend/tenant/approvals/${approval_id}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason })
+    });
+    setBusy(null);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert(`Failed: ${d.detail || r.statusText}`);
+      return;
+    }
+    refresh();
+  }
+
   return (
     <>
       <Topbar crumb={[{ label: "Operate" }, { label: "Approvals" }]} />
       <div className="px-6 lg:px-10 py-8">
         <div className="flex items-end justify-between gap-6 mb-6">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-ink-3 mb-2">Human-in-the-loop · {rows.length} pending</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-ink-3 mb-2">
+              {loading ? "loading…" : `Human-in-the-loop · ${rows.length} pending`}
+            </div>
             <h1 className="font-display text-[36px] leading-[1] tracking-tightest">Approvals queue</h1>
             <p className="text-ink-2 text-[14px] mt-2 max-w-xl">
               Actions over policy threshold pause here. Approving re-runs with the original arguments — idempotent.
@@ -30,7 +63,7 @@ export default async function ApprovalsPage() {
           </div>
         </div>
 
-        {rows.length === 0 ? (
+        {!loading && rows.length === 0 ? (
           <EmptyState
             title="Queue is clear."
             body="When an action exceeds your policy's approval threshold, it'll pause here for review."
@@ -61,12 +94,20 @@ export default async function ApprovalsPage() {
                       <li className="flex justify-between"><span className="text-ink-2">Run</span><span className="font-mono">{shortId(a.action_run_id, 6)}</span></li>
                     </ul>
                     <div className="mt-5 grid grid-cols-2 gap-2">
-                      <form action={`/api/backend/tenant/approvals/${a.id}/decision`} method="post">
-                        <button className="w-full h-10 bg-ink text-paper text-[13px] hover:bg-blue transition">Approve</button>
-                      </form>
-                      <form action={`/api/backend/tenant/approvals/${a.id}/decision`} method="post">
-                        <button className="w-full h-10 border border-line bg-paper text-ink text-[13px] hover:border-danger hover:text-danger transition">Reject</button>
-                      </form>
+                      <button
+                        disabled={busy === a.id}
+                        onClick={() => decide(a.id, "approve")}
+                        className="h-10 bg-ink text-paper text-[13px] hover:bg-blue disabled:opacity-50 transition"
+                      >
+                        {busy === a.id ? "…" : "Approve"}
+                      </button>
+                      <button
+                        disabled={busy === a.id}
+                        onClick={() => decide(a.id, "reject")}
+                        className="h-10 border border-line bg-paper text-ink text-[13px] hover:border-danger hover:text-danger transition disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
                     </div>
                   </div>
                 </div>

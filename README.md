@@ -54,11 +54,11 @@ Support-Agent/
 
 ## How customers reach the operator (three surfaces, one engine)
 
-| Surface | Install | When to use |
-|---|---|---|
-| **Site widget** (`/widget.js`) | One `<script>` tag → floating launcher | Default. Sits on order / account pages where context lives. |
+| Surface                                          | Install                                       | When to use                                                     |
+| ------------------------------------------------ | --------------------------------------------- | --------------------------------------------------------------- |
+| **Site widget** (`/widget.js`)           | One `<script>` tag → floating launcher     | Default. Sits on order / account pages where context lives.     |
 | **Hosted chat URL** (`/c/<tenant-slug>`) | Just a link. Optional CNAME for custom domain | Email signatures, QR codes, transactional emails, status pages. |
-| **Headless API** (`POST /api/chat`) | HTTP, bring your own UI | Apps already shipping a chat surface. |
+| **Headless API** (`POST /api/chat`)      | HTTP, bring your own UI                       | Apps already shipping a chat surface.                           |
 
 Identity is verified via per-tenant HMAC-SHA256 of the customer's `user_id`, signed server-side. Without it, sessions are anonymous (no action attribution / per-user rate limit).
 
@@ -66,25 +66,27 @@ Identity is verified via per-tenant HMAC-SHA256 of the customer's `user_id`, sig
 
 ## Stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| LLM | **Google Gemini 2.0 Flash** | Fast, cheap, supports tool routing. Swappable. |
-| Embeddings | **Gemini `embedding-001`** | 768-dim, matches pgvector index. |
-| Reasoning | **LangGraph ReACT** | Think → act → observe loop with explicit state. |
+| Layer            | Choice                                                 | Why                                                                                  |
+| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| LLM              | **Google Gemini 2.0 Flash**                      | Fast, cheap, supports tool routing. Swappable.                                       |
+| Embeddings       | **Gemini `embedding-001`**                     | 768-dim, matches pgvector index.                                                     |
+| Reasoning        | **LangGraph ReACT**                              | Think → act → observe loop with explicit state.                                    |
 | Vectors + memory | **Aiven Postgres + `pgvector` + `tsvector`** | Single store: tenant registry, memory, audit, vectors, BM25. RLS-enforced isolation. |
-| Cache | **Aiven Valkey** | Rate limit, idempotency keys, hot session cache, breaker counters. |
-| API | **FastAPI** | async, typed, observability hooks. |
-| Frontend | **Next.js 14 + Tailwind** | App router, server components, JetBrains Mono for IDs. |
+| Cache            | **Aiven Valkey**                                 | Rate limit, idempotency keys, hot session cache, breaker counters.                   |
+| API              | **FastAPI**                                      | async, typed, observability hooks.                                                   |
+| Frontend         | **Next.js 14 + Tailwind**                        | App router, server components, JetBrains Mono for IDs.                               |
 
 ---
 
 ## Quick start (local)
 
 ### 0. Prereqs
+
 - Python 3.11+, Node 20+, Docker (for Postgres + Valkey)
 - A Google Generative AI key — [aistudio.google.com](https://aistudio.google.com/)
 
 ### 1. Backend env
+
 ```bash
 cp .env.example .env
 # Fill GOOGLE_API_KEY, ADMIN_API_KEY, ENCRYPTION_KEY (Fernet).
@@ -92,6 +94,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ```
 
 ### 2. Bring up Postgres + Valkey + app
+
 ```bash
 docker compose up -d postgres valkey
 pip install -r requirements.txt
@@ -102,6 +105,7 @@ uvicorn api.server:app --reload --port 8000 --app-dir src
 Health: `GET /healthz` → `{"status":"ok","pg":true,"valkey":true}`
 
 ### 3. Frontend
+
 ```bash
 cd frontend
 npm install
@@ -109,6 +113,7 @@ npm run dev       # http://localhost:3000
 ```
 
 ### 4. Create your first tenant
+
 ```bash
 # 1. Create tenant (returns api_key once)
 curl -X POST http://localhost:8000/admin/tenants \
@@ -142,10 +147,12 @@ curl -X POST http://localhost:8000/api/chat \
 ## Backend surface
 
 ### Public
+
 - `POST /api/chat` — `X-API-Key` + optional `X-End-User-JWT` → ReACT runs, returns answer.
 - `GET  /api/chat/history/{user_id}/{thread_id}` — replay messages.
 
 ### Tenant self-serve (`X-API-Key`)
+
 - `POST/GET/DELETE /tenant/integrations` — manage Stripe / Shopify / Zendesk / webhook creds (encrypted at rest).
 - `POST/GET /tenant/policies` — per-tool caps + approval thresholds.
 - `POST/GET/DELETE /tenant/kb/{upload,sources}` — KB ingest by HTTP, no filesystem.
@@ -156,13 +163,16 @@ curl -X POST http://localhost:8000/api/chat \
 - `POST /tenant/end-users/{id}/delete` · `GET /tenant/end-users/{id}/export` — GDPR.
 
 ### Admin (`X-Admin-Key`)
+
 - `POST/GET/DELETE /admin/tenants[/{id}]` — tenant CRUD, `/suspend`, `/activate`.
 - Mirrors of the tenant surface for support / impersonation.
 
 ### Inbound webhooks
+
 - `POST /webhooks/{tenant_id}/{stripe|shopify|zendesk}` — HMAC verified, persisted to `webhook_events`, reconciles `action_runs` state.
 
 ### Operational
+
 - `GET /healthz` — deep check (PG + Valkey).
 - `GET /metrics` — Prometheus exposition (HTTP, tool runs, tokens).
 
@@ -245,15 +255,15 @@ Every leg is recorded. Replays return cached results. Pending approvals time out
 
 ## Roadmap
 
-| Phase | Status |
-|---|---|
-| 1 — Multi-tenant foundation (PG + Valkey + RLS + auth) | ✅ Shipped |
-| 2 — Action authority (connectors + policy + idempotency + audit + JWT + billing) | ✅ Shipped |
+| Phase                                                                                                       | Status     |
+| ----------------------------------------------------------------------------------------------------------- | ---------- |
+| 1 — Multi-tenant foundation (PG + Valkey + RLS + auth)                                                     | ✅ Shipped |
+| 2 — Action authority (connectors + policy + idempotency + audit + JWT + billing)                           | ✅ Shipped |
 | 3 — Production hardening (webhooks in + tenant self-serve + budgets + breaker + GDPR + scheduler + Docker) | ✅ Shipped |
-| 4 — Frontend (landing + dashboard + widget + hosted chat) | ✅ Shipped |
-| 5 — Multi-channel (Slack / email / WhatsApp ingestion) | 🟡 Next |
-| 6 — BYO LLM (Anthropic / OpenAI / self-hosted) | 🟡 Next |
-| 7 — Admin web UI for staff, SSO, SOC2 | 🟡 Next |
+| 4 — Frontend (landing + dashboard + widget + hosted chat)                                                  | ✅ Shipped |
+| 5 — Multi-channel (Slack / email / WhatsApp ingestion)                                                     | 🟡 Next    |
+| 6 — BYO LLM (Anthropic / OpenAI / self-hosted)                                                             | 🟡 Next    |
+| 7 — Admin web UI for staff, SSO, SOC2                                                                      | 🟡 Next    |
 
 ---
 

@@ -35,7 +35,7 @@ export default function SignUp() {
         return;
       }
       // Hard navigation so the new httpOnly cookie is sent on the next request.
-      window.location.href = "/dashboard";
+      window.location.href = data.next || "/onboarding";
     } catch (e: any) {
       setErr(e?.name === "AbortError" ? "Timed out. Try again." : e?.message || "Network error");
       setBusy(false);

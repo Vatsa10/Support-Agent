@@ -324,6 +324,97 @@ async def billing(tenant: Tenant = Depends(require_tenant)):
     return await monthly_summary(tenant.id)
 
 
+# ---- Settings (system prompt override, etc.) ------------------------------
+
+class SettingsBody(BaseModel):
+    system_prompt_override: Optional[str] = None
+    top_k: Optional[int] = None
+    confidence_threshold: Optional[float] = None
+
+
+@router.get("/settings")
+async def get_settings(tenant: Tenant = Depends(require_tenant)):
+    async with tenant_conn(tenant.id) as conn:
+        row = await conn.fetchrow(
+            "SELECT system_prompt_override, top_k, confidence_threshold FROM tenant_settings WHERE tenant_id = current_setting('app.tenant_id')::uuid"
+        )
+    return {
+        "system_prompt_override": (row["system_prompt_override"] if row else None),
+        "top_k": (row["top_k"] if row else 5),
+        "confidence_threshold": (float(row["confidence_threshold"]) if row else 0.7),
+    }
+
+
+@router.post("/settings")
+async def set_settings(body: SettingsBody, tenant: Tenant = Depends(require_tenant)):
+    async with tenant_conn(tenant.id) as conn:
+        await conn.execute(
+            """
+            INSERT INTO tenant_settings (tenant_id, system_prompt_override, top_k, confidence_threshold)
+            VALUES (current_setting('app.tenant_id')::uuid, $1, COALESCE($2, 5), COALESCE($3, 0.7))
+            ON CONFLICT (tenant_id) DO UPDATE
+                SET system_prompt_override = COALESCE(EXCLUDED.system_prompt_override, tenant_settings.system_prompt_override),
+                    top_k = COALESCE(EXCLUDED.top_k, tenant_settings.top_k),
+                    confidence_threshold = COALESCE(EXCLUDED.confidence_threshold, tenant_settings.confidence_threshold),
+                    updated_at = now()
+            """,
+            body.system_prompt_override, body.top_k, body.confidence_threshold,
+        )
+    # invalidate prompt override cache
+    from cache.valkey import cache_delete
+    from cache.valkey import tenant_key as _tk
+    await cache_delete(_tk(tenant.id, "prompt_override"))
+    return {"ok": True}
+
+
+# ---- Audit log CSV export -------------------------------------------------
+
+@router.get("/audit/export")
+async def audit_export(
+    tenant: Tenant = Depends(require_tenant),
+    limit: int = Query(10000, ge=1, le=50000),
+):
+    from fastapi.responses import StreamingResponse
+    import csv
+    import io
+
+    async with tenant_conn(tenant.id) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT created_at, user_id, thread_id, tool_name, input::text AS input,
+                   output::text AS output, reasoning
+            FROM audit_log
+            ORDER BY created_at DESC LIMIT $1
+            """,
+            limit,
+        )
+
+    def iter_csv():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["created_at", "user_id", "thread_id", "tool_name", "input", "output", "reasoning"])
+        yield buf.getvalue()
+        buf.seek(0); buf.truncate(0)
+        for r in rows:
+            w.writerow([
+                r["created_at"].isoformat() if r["created_at"] else "",
+                r["user_id"] or "",
+                r["thread_id"] or "",
+                r["tool_name"],
+                r["input"] or "",
+                r["output"] or "",
+                (r["reasoning"] or "").replace("\n", " "),
+            ])
+            yield buf.getvalue()
+            buf.seek(0); buf.truncate(0)
+
+    return StreamingResponse(
+        iter_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="audit_{tenant.id}.csv"'},
+    )
+
+
 # ---- Dashboard aggregate stats --------------------------------------------
 
 @router.get("/stats")

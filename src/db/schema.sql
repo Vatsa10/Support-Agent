@@ -276,6 +276,21 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS api_keys_tenant_idx ON api_keys(tenant_id);
 GRANT SELECT, INSERT, UPDATE ON api_keys TO app_user;
 
+-- publishable_keys: browser-safe per-tenant key (prefix rsv_pub_). Looked up
+-- by raw value on /public/chat (CORS-open, rate-limited).
+CREATE TABLE IF NOT EXISTS publishable_keys (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    pub_key       text NOT NULL UNIQUE,
+    label         text NOT NULL DEFAULT 'default',
+    status        text NOT NULL DEFAULT 'active',
+    allowed_origins text[],
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    last_used_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS publishable_keys_tenant_idx ON publishable_keys(tenant_id);
+GRANT SELECT, INSERT, UPDATE, DELETE ON publishable_keys TO app_user;
+
 -- webhook_events: inbound vendor callbacks (Stripe/Shopify/Zendesk)
 CREATE TABLE IF NOT EXISTS webhook_events (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -337,6 +352,7 @@ ALTER TABLE billing_events       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_keys             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_events       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE token_budgets        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE publishable_keys     ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE tenant_settings      FORCE ROW LEVEL SECURITY;
 ALTER TABLE conversations        FORCE ROW LEVEL SECURITY;
@@ -354,6 +370,7 @@ ALTER TABLE billing_events       FORCE ROW LEVEL SECURITY;
 ALTER TABLE api_keys             FORCE ROW LEVEL SECURITY;
 ALTER TABLE webhook_events       FORCE ROW LEVEL SECURITY;
 ALTER TABLE token_budgets        FORCE ROW LEVEL SECURITY;
+ALTER TABLE publishable_keys     FORCE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -363,7 +380,7 @@ BEGIN
         'tenant_settings','conversations','messages','kb_documents','tickets','audit_log',
         'tenant_integrations','tenant_jwt_secrets','action_policies','idempotency_keys',
         'action_runs','approvals','billing_events',
-        'api_keys','webhook_events','token_budgets'
+        'api_keys','webhook_events','token_budgets','publishable_keys'
     ]
     LOOP
         EXECUTE format($f$

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.admin import router as admin_router
 from api.auth_routes import router as auth_router
 from api.integrations import router as integrations_router
+from api.public_routes import router as public_chat_router, tenant_router as pubkey_tenant_router
 from api.routes import router as api_router
 from api.tenant_api import router as tenant_router
 from api.webhooks import router as webhooks_router
@@ -61,6 +62,8 @@ app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(integrations_router, prefix="/admin")
 app.include_router(tenant_router, prefix="/tenant")
+app.include_router(pubkey_tenant_router, prefix="/tenant")
+app.include_router(public_chat_router, prefix="/public")
 app.include_router(webhooks_router)  # /webhooks/{tenant_id}/{kind}
 
 

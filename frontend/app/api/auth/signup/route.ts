@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
   const r = NextResponse.json({
     tenant_id: data.tenant_id,
     tenant_name: data.tenant_name,
-    user: { id: data.user_id, email: data.email, name: data.name }
+    user: { id: data.user_id, email: data.email, name: data.name },
+    next: "/onboarding"
   });
   r.cookies.set(COOKIE, data.api_key, {
     httpOnly: true,

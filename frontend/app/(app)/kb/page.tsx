@@ -52,7 +52,26 @@ export default function KbPage() {
           <DataTable
             columns={[
               { key: "source", label: "Source", render: (r: any) => <span className="font-mono">{r.source}</span> },
-              { key: "chunks", label: "Chunks", width: "120px", align: "right", render: (r: any) => <span className="font-mono">{r.chunks}</span> }
+              { key: "chunks", label: "Chunks", width: "120px", align: "right", render: (r: any) => <span className="font-mono">{r.chunks}</span> },
+              {
+                key: "actions",
+                label: "",
+                width: "120px",
+                align: "right",
+                render: (r: any) => (
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      if (!confirm(`Delete all chunks for "${r.source}"?`)) return;
+                      const res = await fetch(`/api/backend/tenant/kb/sources/${encodeURIComponent(r.source)}`, { method: "DELETE" });
+                      if (res.ok) refresh();
+                    }}
+                    className="text-[12px] text-ink-2 hover:text-danger"
+                  >
+                    Delete
+                  </button>
+                )
+              }
             ]}
             rows={rows.map((r) => ({ id: r.source, ...r })) as any}
           />
