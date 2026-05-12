@@ -367,6 +367,68 @@ async def set_settings(body: SettingsBody, tenant: Tenant = Depends(require_tena
     return {"ok": True}
 
 
+# ---- LLM provider config --------------------------------------------------
+
+class LlmConfigBody(BaseModel):
+    provider: str  # google | anthropic | openai
+    model: str
+    temperature: float = 0.7
+    api_key: Optional[str] = None
+
+
+@router.get("/llm")
+async def get_llm(tenant: Tenant = Depends(require_tenant)):
+    async with tenant_conn(tenant.id) as conn:
+        row = await conn.fetchrow(
+            "SELECT provider, model, temperature, (encrypted_creds IS NOT NULL) AS has_key FROM llm_configs WHERE tenant_id = current_setting('app.tenant_id')::uuid"
+        )
+    return {
+        "provider": row["provider"] if row else "google",
+        "model": row["model"] if row else "gemini-2.0-flash",
+        "temperature": float(row["temperature"]) if row else 0.7,
+        "has_key": bool(row and row["has_key"]),
+    }
+
+
+@router.post("/llm")
+async def set_llm(body: LlmConfigBody, tenant: Tenant = Depends(require_tenant)):
+    from security.crypto import encrypt_json
+
+    if body.provider not in ("google", "anthropic", "openai"):
+        raise HTTPException(status_code=400, detail="Unknown provider")
+
+    encrypted = encrypt_json({"api_key": body.api_key}) if body.api_key else None
+    async with tenant_conn(tenant.id) as conn:
+        if encrypted is not None:
+            await conn.execute(
+                """
+                INSERT INTO llm_configs (tenant_id, provider, model, temperature, encrypted_creds)
+                VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, $4)
+                ON CONFLICT (tenant_id) DO UPDATE
+                  SET provider = EXCLUDED.provider,
+                      model = EXCLUDED.model,
+                      temperature = EXCLUDED.temperature,
+                      encrypted_creds = EXCLUDED.encrypted_creds,
+                      updated_at = now()
+                """,
+                body.provider, body.model, body.temperature, encrypted,
+            )
+        else:
+            await conn.execute(
+                """
+                INSERT INTO llm_configs (tenant_id, provider, model, temperature)
+                VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3)
+                ON CONFLICT (tenant_id) DO UPDATE
+                  SET provider = EXCLUDED.provider,
+                      model = EXCLUDED.model,
+                      temperature = EXCLUDED.temperature,
+                      updated_at = now()
+                """,
+                body.provider, body.model, body.temperature,
+            )
+    return {"ok": True}
+
+
 # ---- Audit log CSV export -------------------------------------------------
 
 @router.get("/audit/export")

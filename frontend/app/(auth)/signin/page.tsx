@@ -54,7 +54,7 @@ export default function SignIn() {
           <label className="inline-flex items-center gap-2 text-ink-2">
             <input type="checkbox" className="accent-blue h-3.5 w-3.5" /> Keep me signed in
           </label>
-          <Link href="/forgot" className="text-ink-2 hover:text-blue transition">Forgot?</Link>
+          <Link href="/forgot" className="text-ink-2 hover:text-blue transition">Forgot password?</Link>
         </div>
         <button
           type="submit"

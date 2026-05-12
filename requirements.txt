@@ -30,6 +30,7 @@ apscheduler>=3.10.4
 prometheus-client>=0.20.0
 python-json-logger>=2.0.7
 dnspython>=2.6.1
+sentry-sdk[fastapi]>=2.16
 
 # API & Web
 fastapi>=0.115,<0.117

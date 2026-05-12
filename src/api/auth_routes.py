@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,6 +18,8 @@ from pydantic import BaseModel, EmailStr, Field
 from api.auth import Tenant, generate_api_key, hash_api_key, require_tenant
 from cache.valkey import incr_with_ttl
 from db.pool import sys_conn, tenant_conn
+from notify import send_email
+from notify.templates import email_verify, password_reset
 
 router = APIRouter()
 
@@ -192,3 +195,120 @@ async def me(tenant: Tenant = Depends(require_tenant)):
 async def logout(tenant: Tenant = Depends(require_tenant)):
     # Cookie clearing happens client-side; backend has nothing to do beyond ack.
     return {"ok": True, "tenant_id": tenant.id}
+
+
+# ============================================================
+# Forgot password + email verify
+# ============================================================
+
+RESET_TTL_MIN = 30
+VERIFY_TTL_HOURS = 48
+APP_URL = os.getenv("APP_URL", "http://localhost:3000")
+
+
+def _token() -> tuple[str, str]:
+    raw = secrets.token_urlsafe(32)
+    return raw, hashlib.sha256(raw.encode()).hexdigest()
+
+
+class ForgotBody(BaseModel):
+    email: EmailStr
+
+
+@router.post("/forgot")
+async def forgot(body: ForgotBody):
+    # Always 200 to avoid email enumeration.
+    async with sys_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name FROM users WHERE email = $1", body.email
+        )
+    if not row:
+        return {"ok": True}
+
+    # Rate-limit per email
+    n = await incr_with_ttl(f"rl:forgot:{body.email}", ttl_seconds=3600)
+    if n > 5:
+        return {"ok": True}
+
+    raw, h = _token()
+    expires = datetime.now(timezone.utc) + timedelta(minutes=RESET_TTL_MIN)
+    async with sys_conn() as conn:
+        await conn.execute(
+            "INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+            h, row["id"], expires,
+        )
+    link = f"{APP_URL}/reset?token={raw}"
+    subject, html = password_reset(row["name"] or "", link)
+    await send_email(body.email, subject, html, tag="password_reset")
+    return {"ok": True}
+
+
+class ResetBody(BaseModel):
+    token: str
+    password: str = Field(..., min_length=10, max_length=200)
+
+
+@router.post("/reset")
+async def reset(body: ResetBody):
+    h = hashlib.sha256(body.token.encode()).hexdigest()
+    async with sys_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, expires_at, used FROM password_resets WHERE token_hash = $1",
+            h,
+        )
+        if not row or row["used"] or row["expires_at"] < datetime.now(timezone.utc):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired token")
+        await conn.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2",
+            _hash_password(body.password), row["user_id"],
+        )
+        await conn.execute(
+            "UPDATE password_resets SET used = true WHERE token_hash = $1", h
+        )
+    return {"ok": True}
+
+
+class VerifyRequestBody(BaseModel):
+    email: EmailStr
+
+
+@router.post("/verify/request")
+async def verify_request(body: VerifyRequestBody):
+    async with sys_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name FROM users WHERE email = $1", body.email
+        )
+    if not row:
+        return {"ok": True}
+
+    raw, h = _token()
+    expires = datetime.now(timezone.utc) + timedelta(hours=VERIFY_TTL_HOURS)
+    async with sys_conn() as conn:
+        await conn.execute(
+            "INSERT INTO email_verifications (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+            h, row["id"], expires,
+        )
+    link = f"{APP_URL}/verify?token={raw}"
+    subject, html = email_verify(row["name"] or "", link)
+    await send_email(body.email, subject, html, tag="email_verify")
+    return {"ok": True}
+
+
+class VerifyConfirmBody(BaseModel):
+    token: str
+
+
+@router.post("/verify/confirm")
+async def verify_confirm(body: VerifyConfirmBody):
+    h = hashlib.sha256(body.token.encode()).hexdigest()
+    async with sys_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, expires_at, used FROM email_verifications WHERE token_hash = $1",
+            h,
+        )
+        if not row or row["used"] or row["expires_at"] < datetime.now(timezone.utc):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired token")
+        await conn.execute(
+            "UPDATE email_verifications SET used = true WHERE token_hash = $1", h
+        )
+    return {"ok": True}

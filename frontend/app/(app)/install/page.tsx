@@ -48,6 +48,37 @@ curl -X POST https://api.resolve.app/api/chat \\
   -H "Content-Type: application/json" \\
   -d '{"message": "I need a refund for SH-29481", "user_id": "u_42"}'`;
 
+const jwtNode = `// Node.js (jsonwebtoken)
+import jwt from "jsonwebtoken";
+const TENANT_JWT_SECRET = process.env.TENANT_JWT_SECRET; // from /tenant/jwt-secret
+const token = jwt.sign(
+  { sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 3600 },
+  TENANT_JWT_SECRET,
+  { algorithm: "HS256" }
+);
+// Pass as window.ResolveSettings.user_hmac (or X-End-User-JWT header on /api/chat)`;
+
+const jwtPython = `# Python (PyJWT)
+import jwt, time, os
+TENANT_JWT_SECRET = os.environ["TENANT_JWT_SECRET"]
+token = jwt.encode(
+    {"sub": user.id, "email": user.email, "exp": int(time.time()) + 3600},
+    TENANT_JWT_SECRET,
+    algorithm="HS256",
+)`;
+
+const jwtRuby = `# Ruby (jwt gem)
+require "jwt"
+TENANT_JWT_SECRET = ENV["TENANT_JWT_SECRET"]
+payload = { sub: user.id, email: user.email, exp: Time.now.to_i + 3600 }
+token = JWT.encode(payload, TENANT_JWT_SECRET, "HS256")`;
+
+const jwtPhp = `// PHP (firebase/php-jwt)
+use Firebase\\JWT\\JWT;
+$secret = getenv("TENANT_JWT_SECRET");
+$payload = ["sub" => $user->id, "email" => $user->email, "exp" => time() + 3600];
+$token = JWT::encode($payload, $secret, "HS256");`;
+
 export default function InstallPage() {
   return (
     <>
@@ -139,14 +170,23 @@ export default function InstallPage() {
           </a>
         </Block>
 
-        <div className="border border-line border-dashed bg-paper p-6 mt-2">
-          <div className="font-display text-[22px] tracking-tightest">Identity verification</div>
-          <p className="text-ink-2 text-[13.5px] mt-2 max-w-2xl leading-[1.6]">
-            For production, sign the end-user's <span className="font-mono text-ink">user_id</span> server-side with your tenant
-            secret using HMAC-SHA256. The widget passes it through as <span className="font-mono text-ink">X-End-User-JWT</span>;
-            actions get attributed correctly and rate-limited per real user. Without it, sessions are treated as anonymous.
+        <Block
+          tag="04 · identity"
+          title="Sign per-user JWTs (server-side)"
+          body="Get your tenant JWT secret from API keys → Rotate. Sign the end-user's id with HS256, then pass to the widget as user_hmac (or X-End-User-JWT on /api/chat)."
+        >
+          <Tabs
+            tabs={[
+              { label: "Node.js", code: jwtNode, lang: "javascript" },
+              { label: "Python",  code: jwtPython, lang: "python" },
+              { label: "Ruby",    code: jwtRuby, lang: "ruby" },
+              { label: "PHP",     code: jwtPhp, lang: "php" }
+            ]}
+          />
+          <p className="text-[12.5px] text-ink-3 mt-3">
+            Without identity verification, sessions are anonymous — actions can't be attributed and per-user rate limits don't apply.
           </p>
-        </div>
+        </Block>
       </div>
     </>
   );
@@ -179,6 +219,30 @@ function Block({ tag, title, body, children }: { tag: string; title: string; bod
         <div className="lg:col-span-8">{children}</div>
       </div>
     </section>
+  );
+}
+
+function Tabs({ tabs }: { tabs: { label: string; code: string; lang: string }[] }) {
+  const [active, setActive] = useState(0);
+  const t = tabs[active];
+  return (
+    <div>
+      <div className="flex items-center gap-1 mb-3">
+        {tabs.map((tab, i) => (
+          <button
+            key={tab.label}
+            onClick={() => setActive(i)}
+            className={
+              "h-8 px-3 text-[12.5px] border transition " +
+              (i === active ? "bg-ink text-paper border-ink" : "border-line text-ink-2 hover:border-ink hover:text-ink")
+            }
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <Code text={t.code} lang={t.lang} />
+    </div>
   );
 }
 
