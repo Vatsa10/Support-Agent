@@ -83,13 +83,13 @@ function Line({ role, text }: { role: "customer" | "agent"; text: string }) {
     <div className="flex gap-3">
       <span
         className={
-          "shrink-0 w-[64px] font-mono text-[10.5px] uppercase tracking-widest pt-1 " +
+          "shrink-0 w-[96px] font-mono text-[10.5px] uppercase tracking-widest pt-1 " +
           (role === "customer" ? "text-ink-3" : "text-blue")
         }
       >
         {role === "customer" ? "customer" : "resolve"}
       </span>
-      <p className={role === "customer" ? "text-ink-2" : "text-ink"}>{text}</p>
+      <p className={"min-w-0 flex-1 break-words " + (role === "customer" ? "text-ink-2" : "text-ink")}>{text}</p>
     </div>
   );
 }
@@ -98,10 +98,10 @@ function Trace({ step, text, meta }: { step: "thought" | "action" | "observation
   const color = step === "thought" ? "text-ink-3" : step === "action" ? "text-blue" : "text-ink-2";
   return (
     <div className="flex gap-3 items-start font-mono text-[12.5px]">
-      <span className={"shrink-0 w-[64px] uppercase tracking-widest pt-0.5 " + color}>{step}</span>
-      <div>
+      <span className={"shrink-0 w-[96px] uppercase tracking-widest pt-0.5 " + color}>{step}</span>
+      <div className="min-w-0 flex-1 break-words">
         <span className={step === "action" ? "text-ink" : "text-ink-2"}>{text}</span>
-        {meta && <span className="text-ink-3"> &nbsp;· {meta}</span>}
+        {meta && <span className="text-ink-3 ml-1.5">· {meta}</span>}
       </div>
     </div>
   );
